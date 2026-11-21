@@ -25,6 +25,13 @@ const state = {
 
 // ---------- API ----------
 async function api(method, url, body) {
+  if (window.Cloud?.enabled) {
+    try { return await Cloud.api(method, url, body); }
+    catch (err) {
+      if (err.status === 401 && !url.includes('/login')) showAuth();
+      throw err;
+    }
+  }
   const res = await fetch(url, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -92,7 +99,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
     await api('POST', '/api/login', { email: f.get('email'), password: f.get('password') });
     e.target.reset();
     await boot();
-  } catch (err) { $('#authError').textContent = err.message; }
+  } catch (err) { authMessage(err); }
 });
 $('#registerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -104,12 +111,28 @@ $('#registerForm').addEventListener('submit', async (e) => {
       inviteCode: join ? f.get('inviteCode') : '', householdName: join ? '' : f.get('householdName'),
     });
     e.target.reset();
-    history.replaceState(null, '', '/');
+    history.replaceState(null, '', location.pathname);
     state.tab = 'plan';
     await boot();
     toast('Willkommen! Trag zuerst dein Einkommen und deine Fixkosten ein.');
-  } catch (err) { $('#authError').textContent = err.message; }
+  } catch (err) {
+    // Cloud-Modus: E-Mail muss erst bestätigt werden -> zur Anmeldung wechseln
+    if (err.info) { $('[data-auth-tab=login]').click(); $('#loginForm [name=email]').value = f.get('email'); }
+    authMessage(err);
+  }
 });
+// Passwort vergessen (nur im Cloud-Modus): Supabase schickt einen Link, danach neues Passwort unter ⚙ setzen
+if (window.Cloud?.enabled) $('#forgotPw').hidden = false;
+$('#forgotPw').addEventListener('click', async () => {
+  try {
+    await api('POST', '/api/forgot', { email: $('#loginForm [name=email]').value });
+    authMessage({ info: true, message: 'Wir haben dir eine E-Mail geschickt. Tippe auf den Link darin und lege danach ein neues Passwort fest.' });
+  } catch (err) { authMessage(err); }
+});
+function authMessage(err) {
+  $('#authError').textContent = err.message;
+  $('#authError').classList.toggle('info', !!err.info);
+}
 
 // ---------- Navigation ----------
 $$('[data-tab]').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
@@ -127,11 +150,21 @@ async function boot() {
   try {
     const [me, meta] = await Promise.all([api('GET', '/api/me'), api('GET', '/api/meta')]);
     state.me = me; state.meta = meta;
-  } catch { showAuth(); return; }
+  } catch (err) {
+    showAuth();
+    if (err.status && err.status !== 401) authMessage(err);
+    return;
+  } finally { $('#loading').hidden = true; }
   $('#auth').hidden = true;
   $('#app').hidden = false;
   $('#hhName').textContent = state.me.household.name;
   $('#hello').textContent = `Hallo ${state.me.user.name}`;
+  if (window.Cloud?.recovery) {
+    setOldPasswordNeeded(false);
+    history.replaceState(null, '', location.pathname);
+    state.tab = 'account';
+    toast('Bitte lege jetzt ein neues Passwort fest.');
+  }
   switchTab(state.tab);
 }
 
@@ -344,7 +377,7 @@ async function renderHousehold() {
   $('#inviteCode').textContent = state.me.household.inviteCode;
 }
 $('#copyInvite').addEventListener('click', async () => {
-  const link = `${location.origin}/?code=${state.me.household.inviteCode}`;
+  const link = `${location.origin}${location.pathname}?code=${state.me.household.inviteCode}`;
   try { await navigator.clipboard.writeText(link); toast('Einladungslink kopiert'); }
   catch { toast(`Code: ${state.me.household.inviteCode}`); }
 });
@@ -353,14 +386,34 @@ $('#copyInvite').addEventListener('click', async () => {
 function renderAccount() {
   $('#accountInfo').textContent = `${state.me.user.name} · ${state.me.user.email} · Haushalt „${state.me.household.name}“ (${state.me.members.map((m) => m.name).join(', ')})`;
 }
+function setOldPasswordNeeded(needed) {
+  $('#oldPwLabel').hidden = !needed;
+  $('#pwForm [name=oldPassword]').required = needed;
+}
 $('#pwForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   try {
     await api('POST', '/api/password', { oldPassword: f.get('oldPassword'), newPassword: f.get('newPassword') });
     e.target.reset(); toast('Passwort geändert');
+    setOldPasswordNeeded(true);
   } catch (err) { toast(err.message); }
 });
+// CSV-Export: im Cloud-Modus direkt im Browser erzeugen
+$('#exportCsv').addEventListener('click', async (e) => {
+  if (!window.Cloud?.enabled) return;
+  e.preventDefault();
+  try {
+    const blob = new Blob([await Cloud.exportCsv()], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'haushaltsbuch.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  } catch (err) { toast(err.message); }
+});
+// Daten wurden auf einem anderen Gerät geändert -> neu anzeigen
+window.addEventListener('haushalt:sync', () => { if (!$('#app').hidden) render(); });
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
   state.tab = 'overview';
@@ -956,6 +1009,7 @@ async function shrinkImage(file) {
 async function uploadFile(type, id, original) {
   const file = await shrinkImage(original);
   if (file.size > 8 * 1024 * 1024) throw new Error(`${original.name}: zu groß (max. 8 MB).`);
+  if (window.Cloud?.enabled) return Cloud.upload(type, id, file);
   const res = await fetch(`/api/attachments?type=${type}&id=${id}`, {
     method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
@@ -1048,8 +1102,8 @@ async function drawAttachments(el) {
   const label = el.dataset.attLabel;
   el.innerHTML = `${label ? `<div class="att-label">${esc(label)}${list.length ? ` (${list.length})` : ''}</div>` : ''}
     <div class="att-thumbs">${list.map((a) => `
-      <a class="att-thumb" href="/api/files/${a.id}" target="_blank" rel="noopener" title="${esc(a.file_name)}">
-        ${a.file_type.startsWith('image/') && a.file_type !== 'image/heic' ? `<img src="/api/files/${a.id}" alt="${esc(a.file_name)}" loading="lazy">`
+      <a class="att-thumb" href="${esc(a.url || `/api/files/${a.id}`)}" target="_blank" rel="noopener" title="${esc(a.file_name)}">
+        ${a.file_type.startsWith('image/') && a.file_type !== 'image/heic' ? `<img src="${esc(a.url || `/api/files/${a.id}`)}" alt="${esc(a.file_name)}" loading="lazy">`
           : `<span class="att-pdf">${a.file_type === 'application/pdf' ? '📄' : '🖼️'}<small>${esc(a.file_name)}</small></span>`}
         <button type="button" class="att-del" data-file-del="${a.id}" aria-label="Beleg löschen">×</button>
       </a>`).join('')}

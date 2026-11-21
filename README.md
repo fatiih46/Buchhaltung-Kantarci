@@ -40,8 +40,20 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
 - **Haushaltsübersicht** – was jede Person und ihr gemeinsam noch übrig habt (die Details der anderen Person bleiben privat, nur Summen sind sichtbar).
 - CSV-Export (für Excel), Passwort ändern (⚙ oben rechts), Hell-/Dunkelmodus, auf dem Handy als App installierbar („Zum Home-Bildschirm“).
 
-## Starten
+## Kostenlos in der Cloud betreiben (empfohlen)
 
+Ohne eigenen Rechner und ohne Kosten: Konten, Daten und Belegfotos liegen bei **Supabase** (kostenloser Tarif,
+Serverstandort Frankfurt wählbar), die App selbst wird als Webseite kostenlos bei **Netlify** veröffentlicht.
+Ihr öffnet sie dann einfach am Handy unter z. B. `https://haushalt-kantarci.netlify.app`.
+
+Schritt-für-Schritt-Anleitung (ca. 20 Minuten, ohne Programmieren): **[docs/CLOUD.md](docs/CLOUD.md)**
+
+Kurz: Supabase-Projekt anlegen → [`supabase/setup.sql`](supabase/setup.sql) im SQL Editor ausführen →
+Project URL und Publishable key in [`public/config.js`](public/config.js) eintragen → Repository bei Netlify importieren.
+
+## Auf einem eigenen Rechner starten
+
+Alternativ läuft die App mit einem kleinen eigenen Server (dann bleibt `public/config.js` leer).
 Voraussetzung: **Node.js 22.13 oder neuer** (keine weiteren Pakete nötig).
 
 ```bash
@@ -89,8 +101,17 @@ docker build -t haushaltsbuch .
 docker run -d -p 3000:3000 -v haushalt-daten:/data --name haushaltsbuch haushaltsbuch
 ```
 
+## Aufbau
+
+- `public/` – die App (HTML, CSS, JavaScript). `public/core.js` enthält die gesamte Rechenlogik und wird vom
+  Server **und** im Cloud-Modus direkt im Browser verwendet.
+- `public/cloud.js` – Cloud-Modus: Anmeldung, Speicherung und Belege über Supabase.
+- `server.js` – eigener Server (Anmeldung, Belege, Auslieferung der App) für den Betrieb ohne Supabase.
+- `supabase/setup.sql` – Tabellen und Zugriffsregeln für Supabase.
+
 ## Tests
 
 ```bash
-npm test
+npm test             # Server und Rechenlogik
+npm run test:cloud   # Cloud-Modus: Supabase-Regeln und App im Browser (siehe test/cloud/README.md)
 ```

@@ -1,0 +1,12 @@
+{
+  "name": "haushaltsbuch-cloud-tests",
+  "private": true,
+  "description": "Tests für den Cloud-Modus: Supabase-Regeln (PGlite) und die App im Browser (Playwright).",
+  "scripts": {
+    "test": "node rls.js && node e2e.js"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.2.17",
+    "sql.js": "1.15.0"
+  }
+}
