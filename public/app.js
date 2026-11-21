@@ -250,7 +250,7 @@ async function renderEntries() {
     <li data-id="${e.id}">
       <div class="main">
         <div class="title">${e.shop ? `<span class="shop-tag">${esc(e.shop)}</span>${e.note ? ' · ' : ''}` : ''}${esc(e.note || (e.shop ? '' : e.category))}</div>
-        <div class="meta">${new Date(e.date + 'T00:00').toLocaleDateString('de-DE')} · ${esc(e.category)}</div>
+        <div class="meta">${new Date(e.date + 'T00:00').toLocaleDateString('de-DE')} · ${esc(e.category)}${e.files ? ` · <span class="clip">📎 ${e.files}</span>` : ''}</div>
       </div>
       <div class="right">
         <div class="num ${e.kind === 'mehr' ? 'neg' : 'pos'}">${e.kind === 'mehr' ? '−' : '+'}${fmt(e.amount)}</div>
@@ -376,6 +376,9 @@ function openDialog({ title, html, onSave, onDelete, onOpen }) {
   const fresh = $('#dlgBody').cloneNode(false);
   $('#dlgBody').replaceWith(fresh);
   fresh.innerHTML = html;
+  pendingFiles = [];
+  setupFilePicker(fresh);
+  mountAttachments(fresh);
   if (onOpen) onOpen($('#dlgBody'));
   $('#dlgError').textContent = '';
   $('#dlgDelete').hidden = !onDelete;
@@ -385,6 +388,7 @@ function openDialog({ title, html, onSave, onDelete, onOpen }) {
   if (first && window.matchMedia('(pointer: fine)').matches) first.focus();
 }
 $('#dlgCancel').addEventListener('click', () => dlg.close());
+dlg.addEventListener('close', () => { if (attChanged) { attChanged = false; render(); } });
 $('#dlgForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
@@ -474,7 +478,8 @@ function openEntryDialog(item = {}) {
       </div>
       <label>Wo? (Händler / Plattform) <input name="shop" list="shopList" maxlength="60" autocomplete="off" value="${esc(item.shop)}" placeholder="z. B. PayPal, Vinted, eBay, Lidl"></label>
       ${categorySelect(item.category || 'Sonstiges')}
-      <label>Notiz <input name="note" maxlength="200" value="${esc(item.note)}" placeholder="z. B. Winterjacke, Reifenwechsel"></label>`,
+      <label>Notiz <input name="note" maxlength="200" value="${esc(item.note)}" placeholder="z. B. Winterjacke, Reifenwechsel"></label>
+      ${isEdit ? attWidget('entry', item.id, 'Belege / Kassenbon') : filePicker('Beleg / Kassenbon (optional)')}`,
     onOpen: (body) => {
       const shop = $('[name=shop]', body);
       const sel = $('[name=category]', body);
@@ -486,7 +491,11 @@ function openEntryDialog(item = {}) {
         if (hit?.category) sel.value = hit.category;
       });
     },
-    onSave: (d) => isEdit ? api('PUT', `/api/entries/${item.id}`, d) : api('POST', '/api/entries', d),
+    onSave: async (d) => {
+      if (isEdit) return api('PUT', `/api/entries/${item.id}`, d);
+      const { id } = await api('POST', '/api/entries', d);
+      await uploadPending('entry', id);
+    },
     onDelete: isEdit && (() => api('DELETE', `/api/entries/${item.id}`)),
   });
 }
@@ -568,6 +577,7 @@ async function renderLists() {
         <div class="meta">${d.done ? 'vollständig ' + (isDebt ? 'zurückgezahlt' : 'erhalten') : `offen <strong class="num">${fmt(d.remaining)}</strong> von ${fmt(d.total)}`}</div>
         ${d.increased > 0 ? `<div class="meta">${fmt(d.amount)} + ${fmt(d.increased)} ${isDebt ? 'nachträglich geliehen' : 'nachträglich verliehen'}</div>` : ''}
         ${meta ? `<div class="meta">${meta}</div>` : ''}
+        ${d.filesTotal ? `<div class="meta clip">📎 ${d.filesTotal} Beleg${d.filesTotal === 1 ? '' : 'e'}</div>` : ''}
         <div class="progress"><i style="width:${pct}%"></i></div>
       </div>
       <div class="row-actions">
@@ -607,12 +617,14 @@ function openDebtDialog(item) {
       ${!isEdit ? `<label class="check"><input type="checkbox" name="book">
         ${isDebt ? 'Ich habe das Geld bekommen – als Einnahme buchen' : 'Das Geld ist von mir weggegangen – als Ausgabe buchen'}</label>
         <div class="hint">${isDebt ? 'Z. B. Bargeld vom Bruder. Nicht anhaken bei Krediten, die direkt an den Händler gingen (Auto, Handy).' : 'Dann siehst du in deiner Monatsrechnung, dass das Geld gerade fehlt – kommt es zurück, wird es wieder gutgeschrieben.'}</div>` : ''}
+      ${isEdit ? attWidget('debt', item.id, isDebt ? 'Belege zur Schuld (z. B. Vertrag)' : 'Belege (z. B. Schuldschein)') : filePicker('Belege (optional, z. B. Vertrag)')}
       ${isEdit && item.payments.length ? `<div class="subhead">Verlauf · jetzt offen ${fmt(item.remaining)}</div>
         <ul class="history">
           <li><span>${item.start_date ? fmtDate(item.start_date) + ' · ' : ''}Anfangsbetrag</span><span class="num">${fmt(item.amount)}</span></li>
           ${item.payments.slice().reverse().map((p) => `<li>
           <span>${fmtDate(p.date)} · ${p.type === 'erhoehung' ? (isDebt ? 'mehr geliehen' : 'mehr verliehen') : (isDebt ? 'zurückgezahlt' : 'zurückbekommen')}${p.note ? ' · ' + esc(p.note) : ''}${p.entry_id ? ' · <span class="muted">gebucht</span>' : ''}</span>
           <span class="num ${p.type === 'erhoehung' ? '' : 'pos'}">${p.type === 'erhoehung' ? '+' : '−'}${fmt(p.amount)} <button type="button" class="x-btn" data-del-payment="${p.id}" aria-label="Eintrag löschen">×</button></span>
+          ${attWidget('debt_payment', p.id, '', true)}
         </li>`).join('')}</ul>` : ''}`,
     onOpen: (body) => body.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-del-payment]');
@@ -621,7 +633,11 @@ function openDebtDialog(item) {
       btn.closest('li').remove();
       render();
     }),
-    onSave: (d) => isEdit ? api('PUT', `/api/debts/${item.id}`, d) : api('POST', '/api/debts', d),
+    onSave: async (d) => {
+      if (isEdit) return api('PUT', `/api/debts/${item.id}`, d);
+      const { id } = await api('POST', '/api/debts', d);
+      await uploadPending('debt', id);
+    },
     onDelete: isEdit && (() => api('DELETE', `/api/debts/${item.id}`)),
   });
 }
@@ -650,7 +666,8 @@ function openPaymentDialog(debt) {
       <label>Notiz <input name="note" maxlength="200" placeholder="optional, z. B. bar gegeben"></label>
       <label class="check"><input type="checkbox" name="book" ${isDebt && debt.in_budget ? '' : 'checked'}> <span id="bookLabel">${L.bookZ}</span></label>
       <div class="hint" id="bookHint">${isDebt ? (debt.in_budget ? 'Die Rate zählt schon bei den Fixkosten – nur für Sonderzahlungen anhaken.' : 'Nicht anhaken, wenn diese Rate schon in deinen Fixkosten steckt.') : ''}</div>
-      <div class="hint" id="newTotal"></div>`,
+      <div class="hint" id="newTotal"></div>
+      ${filePicker('Beleg / Quittung (optional)')}`,
     onOpen: (body) => {
       const update = () => {
         const type = $('[name=type]:checked', body).value;
@@ -664,7 +681,10 @@ function openPaymentDialog(debt) {
       body.addEventListener('input', update);
       update();
     },
-    onSave: (d) => api('POST', `/api/debts/${debt.id}/payments`, d),
+    onSave: async (d) => {
+      const { id } = await api('POST', `/api/debts/${debt.id}/payments`, d);
+      await uploadPending('debt_payment', id);
+    },
   });
 }
 
@@ -753,7 +773,7 @@ async function renderZakat() {
   const z = await api('GET', '/api/zakat');
   zakatCache = z;
   const t = z.totals;
-  const belege = z.years.reduce((s, y) => s + y.payments.filter((p) => p.hasFile).length, 0);
+  const belege = z.years.reduce((s, y) => s + y.payments.reduce((n, p) => n + p.files, 0), 0);
   $('#listSummary').innerHTML = z.years.length ? `<div class="summary-row">
       <div><small>Noch zu geben</small><strong class="${t.open > 0 ? 'neg' : 'pos'}">${fmt(t.open)}</strong></div>
       <div><small>Zekât gegeben (alle Jahre)</small><strong>${fmt(t.paid)}</strong></div>
@@ -767,7 +787,7 @@ async function renderZakat() {
   $('#listBody').innerHTML = z.years.map((y) => {
     const pct = y.due > 0 ? Math.min(100, (y.paid / y.due) * 100) : 0;
     const extra = [y.fitre ? `Fitre ${fmt(y.fitre)}` : '', y.sadaka ? `Sadaka ${fmt(y.sadaka)}` : ''].filter(Boolean).join(' · ');
-    const files = y.payments.filter((p) => p.hasFile).length;
+    const files = y.payments.reduce((n, p) => n + p.files, 0);
     return `<li data-id="${y.id}">
       <div class="date-badge year"><b>${esc(y.label)}</b></div>
       <div class="grow">
@@ -827,12 +847,10 @@ function openZakatYearDialog(item) {
       <label>Notiz <input name="note" maxlength="300" value="${esc(item?.note ?? '')}"></label>
       ${isEdit ? `<div class="subhead">Zahlungen & Belege</div>
         ${item.payments.length ? `<ul class="history">${item.payments.map((p) => `<li>
-          <span>${fmtDate(p.date)} · <b>${ZAKAT_KIND[p.kind]}</b>${p.recipient ? ' an ' + esc(p.recipient) : ''}${p.note ? ' · ' + esc(p.note) : ''}<br>
-            ${p.hasFile ? `<a href="/api/zakat/payments/${p.id}/file" target="_blank" rel="noopener">📎 ${esc(p.file_name || 'Beleg')}</a>`
-              : `<button type="button" class="link-btn" data-zupload="${p.id}">📎 Beleg hinzufügen</button>`}</span>
+          <span>${fmtDate(p.date)} · <b>${ZAKAT_KIND[p.kind]}</b>${p.recipient ? ' an ' + esc(p.recipient) : ''}${p.note ? ' · ' + esc(p.note) : ''}</span>
           <span class="num">${fmt(p.amount)} <button type="button" class="x-btn" data-zdel="${p.id}" aria-label="Zahlung löschen">×</button></span>
-        </li>`).join('')}</ul>` : '<p class="muted small" style="margin:0">Noch keine Zahlungen.</p>'}
-        <input type="file" id="zFile" accept="image/*,application/pdf" hidden>` : ''}`,
+          ${attWidget('zakat_payment', p.id, '', true)}
+        </li>`).join('')}</ul>` : '<p class="muted small" style="margin:0">Noch keine Zahlungen.</p>'}` : ''}`,
     onOpen: (body) => {
       const calcInputs = () => Object.fromEntries(['cash', 'gold', 'other', 'receivables', 'debts', 'nisab']
         .map((k) => [k, $(`[name=calc_${k}]`, body).value]));
@@ -849,26 +867,12 @@ function openZakatYearDialog(item) {
       $('#calcApply', body).addEventListener('click', () => {
         $('[name=due]', body).value = String(show().due).replace('.', ',');
       });
-      let uploadFor = null;
       body.addEventListener('click', async (e) => {
         const del = e.target.closest('[data-zdel]');
-        const up = e.target.closest('[data-zupload]');
-        if (del && confirm('Diese Zahlung löschen? Ein angehängter Beleg wird mit gelöscht.')) {
+        if (del && confirm('Diese Zahlung löschen? Angehängte Belege werden mit gelöscht.')) {
           await api('DELETE', `/api/zakat/payments/${del.dataset.zdel}`);
           del.closest('li').remove(); render();
         }
-        if (up) { uploadFor = up.dataset.zupload; $('#zFile', body).click(); }
-      });
-      $('#zFile', body)?.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file || !uploadFor) return;
-        try {
-          await uploadBeleg(uploadFor, file);
-          toast('Beleg gespeichert');
-          dlg.close(); await render();
-          const y = zakatCache.years.find((x) => x.id === item.id);
-          if (y) openZakatYearDialog(y);
-        } catch (err) { $('#dlgError').textContent = err.message; }
       });
     },
     onSave: (d) => {
@@ -900,7 +904,7 @@ function openZakatPaymentDialog(year) {
       <label>An wen? <input name="recipient" list="recipList" maxlength="120" placeholder="z. B. Moschee, Verwandte, Hilfsorganisation"></label>
       <datalist id="recipList">${recipients.map((r) => `<option value="${esc(r)}">`).join('')}</datalist>
       <label>Notiz <input name="note" maxlength="200" placeholder="optional, z. B. bar übergeben, Überweisung"></label>
-      <label>Beleg / Quittung (Foto oder PDF, optional) <input type="file" name="file" accept="image/*,application/pdf"></label>
+      ${filePicker('Beleg / Quittung (optional)')}
       <label class="check"><input type="checkbox" name="book" checked> Als Ausgabe in diesem Monat buchen (Spenden & Zekât)</label>
       <div class="hint" id="zAfter"></div>`,
     onOpen: (body) => {
@@ -914,13 +918,8 @@ function openZakatPaymentDialog(year) {
       body.addEventListener('input', update); body.addEventListener('change', update); update();
     },
     onSave: async (d) => {
-      const file = d.file && d.file.size ? d.file : null;
-      delete d.file;
       const { id } = await api('POST', `/api/zakat/years/${year.id}/payments`, d);
-      if (file) {
-        try { await uploadBeleg(id, file); }
-        catch (err) { toast('Zahlung gespeichert, aber Beleg nicht: ' + err.message); }
-      }
+      await uploadPending('zakat_payment', id);
     },
   });
 }
@@ -938,15 +937,113 @@ async function shrinkImage(file) {
     return blob ? new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file;
   } catch { return file; }
 }
-async function uploadBeleg(paymentId, original) {
+async function uploadFile(type, id, original) {
   const file = await shrinkImage(original);
-  if (file.size > 8 * 1024 * 1024) throw new Error('Datei zu groß (max. 8 MB).');
-  const res = await fetch(`/api/zakat/payments/${paymentId}/file`, {
+  if (file.size > 8 * 1024 * 1024) throw new Error(`${original.name}: zu groß (max. 8 MB).`);
+  const res = await fetch(`/api/attachments?type=${type}&id=${id}`, {
     method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
     body: file,
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Upload fehlgeschlagen');
+}
+
+// ---------- Belege: Fotos & PDFs an Einträgen ----------
+let pendingFiles = [];   // ausgewählte Dateien für einen Eintrag, der erst beim Speichern angelegt wird
+let attChanged = false;  // Belege wurden geändert -> Listen beim Schließen neu laden
+
+const pickButtons = (cls) => `
+  <label class="btn small att-btn">📷 Foto aufnehmen<input type="file" class="${cls}" accept="image/*" capture="environment" hidden></label>
+  <label class="btn small att-btn">🖼️ Galerie / PDF<input type="file" class="${cls}" accept="image/*,application/pdf" multiple hidden></label>`;
+
+// Für neue Einträge: Dateien sammeln (mehrere Fotos nacheinander möglich), hochladen nach dem Speichern
+function filePicker(label) {
+  return `<div class="att-pick"><div class="att-label">${label}</div>
+    <div class="att-thumbs" data-pending></div>
+    <div class="att-buttons">${pickButtons('pick-input')}</div></div>`;
+}
+function setupFilePicker(root) {
+  const box = $('.att-pick', root);
+  if (!box) return;
+  const draw = () => {
+    $('[data-pending]', box).innerHTML = pendingFiles.map((f, i) => `
+      <div class="att-thumb">${f.type.startsWith('image/') ? `<img src="${f.url}" alt="">` : `<span class="att-pdf">📄<small>${esc(f.name)}</small></span>`}
+        <button type="button" class="att-del" data-pending-del="${i}" aria-label="Entfernen">×</button></div>`).join('');
+  };
+  box.addEventListener('change', (e) => {
+    if (!e.target.classList.contains('pick-input')) return;
+    for (const f of e.target.files) { f.url = URL.createObjectURL(f); pendingFiles.push(f); }
+    e.target.value = '';
+    draw();
+  });
+  box.addEventListener('click', (e) => {
+    const del = e.target.closest('[data-pending-del]');
+    if (!del) return;
+    pendingFiles.splice(Number(del.dataset.pendingDel), 1);
+    draw();
+  });
+}
+async function uploadPending(type, id) {
+  const files = pendingFiles;
+  pendingFiles = [];
+  const failed = [];
+  for (const f of files) {
+    try { await uploadFile(type, id, f); } catch (err) { failed.push(err.message); }
+  }
+  if (failed.length) toast(`Gespeichert, aber ${failed.length} Beleg(e) nicht: ${failed[0]}`);
+}
+
+// Für bestehende Einträge: Belege anzeigen, sofort hinzufügen oder löschen
+function attWidget(type, id, label = '', compact = false) {
+  return `<div class="att ${compact ? 'compact' : ''}" data-att-type="${type}" data-att-id="${id}" data-att-label="${esc(label)}"></div>`;
+}
+function mountAttachments(root) {
+  $$('.att[data-att-type]', root).forEach((el) => {
+    drawAttachments(el);
+    el.addEventListener('change', async (e) => {
+      if (!e.target.classList.contains('att-input')) return;
+      const files = [...e.target.files];
+      e.target.value = '';
+      const status = $('.att-status', el);
+      let n = 0;
+      for (const f of files) {
+        status.textContent = `Lade hoch … ${++n}/${files.length}`;
+        try { await uploadFile(el.dataset.attType, el.dataset.attId, f); }
+        catch (err) { toast(err.message); }
+      }
+      attChanged = true;
+      drawAttachments(el);
+    });
+    el.addEventListener('click', async (e) => {
+      const del = e.target.closest('[data-file-del]');
+      if (!del) return;
+      e.preventDefault();
+      if (!confirm('Diesen Beleg löschen?')) return;
+      await api('DELETE', `/api/files/${del.dataset.fileDel}`);
+      attChanged = true;
+      drawAttachments(el);
+    });
+  });
+}
+async function drawAttachments(el) {
+  const compact = el.classList.contains('compact');
+  let list = [];
+  try { list = await api('GET', `/api/attachments?type=${el.dataset.attType}&id=${el.dataset.attId}`); } catch { /* leer anzeigen */ }
+  const label = el.dataset.attLabel;
+  el.innerHTML = `${label ? `<div class="att-label">${esc(label)}${list.length ? ` (${list.length})` : ''}</div>` : ''}
+    <div class="att-thumbs">${list.map((a) => `
+      <a class="att-thumb" href="/api/files/${a.id}" target="_blank" rel="noopener" title="${esc(a.file_name)}">
+        ${a.file_type.startsWith('image/') && a.file_type !== 'image/heic' ? `<img src="/api/files/${a.id}" alt="${esc(a.file_name)}" loading="lazy">`
+          : `<span class="att-pdf">${a.file_type === 'application/pdf' ? '📄' : '🖼️'}<small>${esc(a.file_name)}</small></span>`}
+        <button type="button" class="att-del" data-file-del="${a.id}" aria-label="Beleg löschen">×</button>
+      </a>`).join('')}
+      ${compact ? `<span class="att-buttons mini">
+        <label class="att-mini" title="Foto aufnehmen">📷<input type="file" class="att-input" accept="image/*" capture="environment" hidden></label>
+        <label class="att-mini" title="Aus Galerie oder PDF">＋<input type="file" class="att-input" accept="image/*,application/pdf" multiple hidden></label>
+      </span>` : ''}
+    </div>
+    ${compact ? '' : `<div class="att-buttons">${pickButtons('att-input')}</div>`}
+    <div class="att-status muted small"></div>`;
 }
 
 // Druckbarer Nachweis über alle Jahre (im Browser „Als PDF speichern“)
@@ -960,7 +1057,7 @@ function openZakatReport(z) {
     ${y.calc ? `<p class="small">Berechnung: ${CALC_FIELDS.filter(([k]) => y.calc[k]).map(([k, l]) => `${l} ${fmt(y.calc[k])}`).join(' · ')}${y.calc.nisab ? ` · Nisab ${fmt(y.calc.nisab)}` : ''}</p>` : ''}
     ${y.payments.length ? `<table><thead><tr><th>Datum</th><th>Art</th><th>Empfänger</th><th>Notiz</th><th>Beleg</th><th class="r">Betrag</th></tr></thead><tbody>
       ${y.payments.slice().reverse().map((p) => `<tr><td>${fmtDate(p.date)}</td><td>${ZAKAT_KIND[p.kind]}</td><td>${esc(p.recipient)}</td>
-        <td>${esc(p.note)}</td><td>${p.hasFile ? esc(p.file_name || 'ja') : '–'}</td><td class="r">${fmt(p.amount)}</td></tr>`).join('')}
+        <td>${esc(p.note)}</td><td>${p.files ? `${p.files} Beleg${p.files === 1 ? '' : 'e'}` : '–'}</td><td class="r">${fmt(p.amount)}</td></tr>`).join('')}
     </tbody></table>` : '<p class="small">Keine Zahlungen erfasst.</p>'}`).join('');
   w.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Zekât-Nachweis ${esc(state.me.user.name)}</title>
     <style>body{font-family:system-ui,sans-serif;color:#111;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.4}

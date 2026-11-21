@@ -283,3 +283,30 @@ input[type=date] { min-width: 0; -webkit-appearance: none; appearance: none; }
 .dlg-actions { flex-wrap: wrap; }
 .dlg-actions .btn { padding-left: .8rem; padding-right: .8rem; }
 @media (max-width: 420px) { .dlg-actions .btn.primary { flex: 1; } }
+
+/* Belege */
+.att, .att-pick { display: flex; flex-direction: column; gap: .45rem; }
+.att-label { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 700; }
+.att-thumbs { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; }
+.att-thumbs:empty { display: none; }
+.att-thumb { position: relative; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--bg);
+  border: 1px solid var(--line); display: block; flex: none; }
+.att-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.att-pdf { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; font-size: 1.3rem; padding: 2px; }
+.att-pdf small { font-size: .55rem; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-del { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; border: 0; cursor: pointer;
+  background: rgba(0,0,0,.6); color: #fff; font-size: .85rem; line-height: 1; padding: 0; }
+.att-buttons { display: flex; flex-wrap: wrap; gap: .45rem; }
+.att-btn { cursor: pointer; }
+.att.compact { flex-basis: 100%; gap: .2rem; }
+.att.compact .att-thumbs { display: flex; }
+.att.compact .att-thumb { width: 44px; height: 44px; }
+.att.compact .att-del { width: 18px; height: 18px; font-size: .7rem; }
+.att.compact .att-status:empty { display: none; }
+.att-mini { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px;
+  border: 1px dashed var(--line); cursor: pointer; font-size: 1rem; color: var(--primary); }
+.history li { flex-wrap: wrap; }
+.clip { white-space: nowrap; }
+.history li > span:first-child { flex: 1 1 55%; min-width: 0; }
+.history li > span.num { margin-left: auto; }
+.att-thumb { text-decoration: none; color: inherit; }

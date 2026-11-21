@@ -28,6 +28,10 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
     wurde und was noch offen ist. Jede Zahlung mit Datum, Empfänger, Notiz und optionalem **Beleg** (Foto oder PDF).
     Fitre und Sadaka werden mit dokumentiert. Archiv über alle Jahre und **Nachweis zum Drucken / als PDF**.
   - Zahlungen und gekaufte Geschenke lassen sich per Häkchen direkt als Ausgabe/Einnahme im Monat buchen.
+- **Belege fotografieren** – an jede Ausgabe, jede Schuld/Forderung, jede einzelne Zahlung darin und jede
+  Zekât-Zahlung lassen sich beliebig viele Fotos oder PDFs hängen („📷 Foto aufnehmen“ öffnet am Handy direkt die
+  Kamera, „🖼️ Galerie / PDF“ erlaubt mehrere auf einmal). Fotos werden automatisch verkleinert; ein 📎 in den Listen
+  zeigt, wo Belege dranhängen. Belege sieht nur das eigene Konto.
 - **Übersicht** – Einkommen − Fixkosten − Mehrverbrauch + Wenigerverbrauch = **„Für mich verfügbar“**, mit Aufteilung nach Kategorie.
 - **Haushaltsübersicht** – was jede Person und ihr gemeinsam noch übrig habt (die Details der anderen Person bleiben privat, nur Summen sind sichtbar).
 - CSV-Export (für Excel), Passwort ändern (⚙ oben rechts), Hell-/Dunkelmodus, auf dem Handy als App installierbar („Zum Home-Bildschirm“).

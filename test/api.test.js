@@ -269,18 +269,21 @@ test('Zekât: Soll, Teilzahlungen, Fitre/Sadaka, Belege', async () => {
   assert.equal(s.spent, 500);
 
   // Beleg hochladen (PDF) und abrufen
-  const upload = (type, data) => fetch(`${base}/api/zakat/payments/${p1.id}/file`, {
+  const upload = (type, data) => fetch(`${base}/api/attachments?type=zakat_payment&id=${p1.id}`, {
     method: 'POST', headers: { 'Content-Type': type, 'X-File-Name': encodeURIComponent('Quittung Moschee.pdf'), Cookie: c.cookie() }, body: data,
   });
   assert.equal((await upload('application/pdf', Buffer.from('nicht wirklich'))).status, 415);
   assert.equal((await upload('text/html', Buffer.from('<script>'))).status, 415);
-  assert.equal((await upload('application/pdf', Buffer.from('%PDF-1.4 test'))).status, 200);
+  const up = await upload('application/pdf', Buffer.from('%PDF-1.4 test'));
+  assert.equal(up.status, 200);
+  const fileId = (await up.json()).id;
   z = (await c('GET', '/api/zakat')).data;
   const pay = z.years[0].payments.find((p) => p.id === p1.id);
-  assert.ok(pay.hasFile);
-  assert.equal(pay.file_name, 'Quittung Moschee.pdf');
-  assert.equal(pay.file_path, undefined, 'Speicherpfad wird nicht ausgeliefert');
-  const f = await fetch(`${base}/api/zakat/payments/${p1.id}/file`, { headers: { Cookie: c.cookie() } });
+  assert.equal(pay.files, 1);
+  const list = (await c('GET', `/api/attachments?type=zakat_payment&id=${p1.id}`)).data;
+  assert.equal(list[0].file_name, 'Quittung Moschee.pdf');
+  assert.equal(list[0].file_path, undefined, 'Speicherpfad wird nicht ausgeliefert');
+  const f = await fetch(`${base}/api/files/${fileId}`, { headers: { Cookie: c.cookie() } });
   assert.equal(f.status, 200);
   assert.equal(f.headers.get('content-type'), 'application/pdf');
   assert.equal(await f.text(), '%PDF-1.4 test');
@@ -288,7 +291,8 @@ test('Zekât: Soll, Teilzahlungen, Fitre/Sadaka, Belege', async () => {
   // Fremde Person kommt nicht an den Beleg
   const other = client();
   await other('POST', '/api/register', { name: 'Fremd2', email: 'fremd2@example.com', password: 'geheim123' });
-  assert.equal((await fetch(`${base}/api/zakat/payments/${p1.id}/file`, { headers: { Cookie: other.cookie() } })).status, 404);
+  assert.equal((await fetch(`${base}/api/files/${fileId}`, { headers: { Cookie: other.cookie() } })).status, 404);
+  assert.equal((await other('GET', `/api/attachments?type=zakat_payment&id=${p1.id}`)).status, 404);
   assert.equal((await other('DELETE', `/api/zakat/payments/${p1.id}`)).status, 404);
 
   // Zahlung löschen -> Summe und Buchung aktualisieren sich
@@ -306,4 +310,53 @@ test('Beträge in deutscher Schreibweise', async () => {
     const inc = (await c('GET', '/api/incomes')).data.find((i) => i.name === input);
     assert.equal(inc.amount, expected, input);
   }
+});
+
+test('Mehrere Belege an Ausgaben, Schulden und Zahlungen', async () => {
+  const c = client();
+  await c('POST', '/api/register', { name: 'Belege', email: 'belege@example.com', password: 'geheim123' });
+  const today = new Date().toISOString().slice(0, 10);
+  const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+  const up = async (type, id, mime = 'image/jpeg', data = jpg) => fetch(`${base}/api/attachments?type=${type}&id=${id}`, {
+    method: 'POST', headers: { 'Content-Type': mime, 'X-File-Name': 'foto.jpg', Cookie: c.cookie() }, body: data,
+  });
+
+  const e = (await c('POST', '/api/entries', { date: today, category: 'Sonstiges', amount: '20', shop: 'eBay' })).data;
+  assert.ok(e.id);
+  for (let i = 0; i < 3; i++) assert.equal((await up('entry', e.id)).status, 200);
+  let entry = (await c('GET', '/api/entries?month=' + today.slice(0, 7))).data.find((x) => x.id === e.id);
+  assert.equal(entry.files, 3);
+
+  const d = (await c('POST', '/api/debts', { direction: 'schuld', person: 'Bank', amount: '1000' })).data;
+  await up('debt', d.id, 'application/pdf', Buffer.from('%PDF-1.7 vertrag'));
+  const pay = (await c('POST', `/api/debts/${d.id}/payments`, { date: today, amount: '100', book: 'on' })).data;
+  assert.ok(pay.id);
+  await up('debt_payment', pay.id); await up('debt_payment', pay.id);
+  let debt = (await c('GET', '/api/debts')).data[0];
+  assert.equal(debt.files, 1);
+  assert.equal(debt.payments[0].files, 2);
+  assert.equal(debt.filesTotal, 3);
+
+  // Unbekannter Typ / fremder Eintrag
+  assert.equal((await up('users', 1)).status, 400);
+  const other = client();
+  await other('POST', '/api/register', { name: 'Fremd3', email: 'fremd3@example.com', password: 'geheim123' });
+  const foreign = await fetch(`${base}/api/attachments?type=entry&id=${e.id}`, {
+    method: 'POST', headers: { 'Content-Type': 'image/jpeg', Cookie: other.cookie() }, body: jpg });
+  assert.equal(foreign.status, 404);
+
+  // Einzelnen Beleg löschen
+  const files = (await c('GET', `/api/attachments?type=entry&id=${e.id}`)).data;
+  await c('DELETE', `/api/files/${files[0].id}`);
+  entry = (await c('GET', '/api/entries?month=' + today.slice(0, 7))).data.find((x) => x.id === e.id);
+  assert.equal(entry.files, 2);
+
+  // Löschen der Zahlung entfernt ihre Belege und die gebuchte Ausgabe
+  await c('DELETE', `/api/payments/${pay.id}`);
+  assert.equal((await c('GET', `/api/attachments?type=debt&id=${d.id}`)).data.length, 1);
+  const allFiles = fs.readdirSync(path.join(process.env.DATA_DIR, 'belege'));
+  // Schuld löschen -> auch Vertrag weg
+  await c('DELETE', `/api/debts/${d.id}`);
+  const after = fs.readdirSync(path.join(process.env.DATA_DIR, 'belege'));
+  assert.equal(allFiles.length - after.length, 1);
 });

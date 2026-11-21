@@ -142,6 +142,25 @@ if (!hasColumn('fixed_costs', 'kind')) db.exec("ALTER TABLE fixed_costs ADD COLU
 if (!hasColumn('debt_payments', 'type')) db.exec("ALTER TABLE debt_payments ADD COLUMN type TEXT NOT NULL DEFAULT 'zahlung'");
 if (!hasColumn('entries', 'shop')) db.exec("ALTER TABLE entries ADD COLUMN shop TEXT NOT NULL DEFAULT ''");
 
+// Belege (Fotos/PDFs) – beliebig viele pro Ausgabe, Schuld, Schulden-Zahlung oder Zekât-Zahlung
+db.exec(`
+CREATE TABLE IF NOT EXISTS attachments (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  owner_type TEXT NOT NULL CHECK (owner_type IN ('entry','debt','debt_payment','zakat_payment')),
+  owner_id INTEGER NOT NULL,
+  file_name TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_owner ON attachments(owner_type, owner_id);
+INSERT INTO attachments (user_id, owner_type, owner_id, file_name, file_type, file_path)
+  SELECT y.user_id, 'zakat_payment', p.id, COALESCE(p.file_name, 'beleg'), p.file_type, p.file_path
+  FROM zakat_payments p JOIN zakat_years y ON y.id = p.year_id WHERE p.file_path IS NOT NULL;
+UPDATE zakat_payments SET file_name = NULL, file_type = NULL, file_path = NULL WHERE file_path IS NOT NULL;
+`);
+
 const CATEGORIES = [
   'Haus & Wohnen', 'Kredit / Abtrag', 'Nebenkosten & Energie', 'Einkaufen & Lebensmittel',
   'Auto & Verschleiß', 'Versicherungen', 'Urlaub', 'Handy, Internet & Abos',
@@ -287,14 +306,16 @@ function debtsFor(userId) {
   const debts = db.prepare('SELECT * FROM debts WHERE user_id = ? ORDER BY direction, person').all(userId);
   const payStmt = db.prepare('SELECT * FROM debt_payments WHERE debt_id = ? ORDER BY date DESC, id DESC');
   return debts.map((d) => {
-    const payments = payStmt.all(d.id).map((p) => ({ ...p }));
+    const payments = payStmt.all(d.id).map((p) => ({ ...p, files: attCount('debt_payment', p.id) }));
     // "zahlung" = Rückzahlung (Betrag wird kleiner), "erhoehung" = weiteres Geld geliehen/verliehen (Betrag wird größer)
     const paid = round2(payments.filter((p) => p.type !== 'erhoehung').reduce((s, p) => s + p.amount, 0));
     const increased = round2(payments.filter((p) => p.type === 'erhoehung').reduce((s, p) => s + p.amount, 0));
     const total = round2(d.amount + increased);
     const remaining = round2(total - paid);
     const monthsLeft = d.monthly_rate > 0 && remaining > 0 ? Math.ceil(remaining / d.monthly_rate) : null;
-    return { ...d, in_budget: !!d.in_budget, payments, paid, increased, total, remaining, done: remaining <= 0, monthsLeft };
+    const files = attCount('debt', d.id);
+    return { ...d, in_budget: !!d.in_budget, payments, paid, increased, total, remaining, done: remaining <= 0, monthsLeft,
+      files, filesTotal: files + payments.reduce((n, p) => n + p.files, 0) };
   });
 }
 
@@ -605,12 +626,13 @@ function entryFields(userId, body) {
   ];
 }
 route('GET', '/api/entries', ({ user, query }) =>
-  db.prepare("SELECT * FROM entries WHERE user_id = ? AND substr(date, 1, 7) = ? ORDER BY date DESC, id DESC")
+  db.prepare(`SELECT e.*, (SELECT COUNT(*) FROM attachments a WHERE a.owner_type = 'entry' AND a.owner_id = e.id) AS files
+    FROM entries e WHERE user_id = ? AND substr(date, 1, 7) = ? ORDER BY date DESC, id DESC`)
     .all(user.id, monthStr(query.get('month'))));
 route('POST', '/api/entries', ({ user, body }) => {
-  db.prepare('INSERT INTO entries (date, kind, category, amount, note, shop, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(...entryFields(user.id, body), user.id);
-  return { ok: true };
+  const id = Number(db.prepare('INSERT INTO entries (date, kind, category, amount, note, shop, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(...entryFields(user.id, body), user.id).lastInsertRowid);
+  return { ok: true, id };
 });
 route('PUT', '/api/entries/:id', ({ user, body, params }) => {
   const r = db.prepare('UPDATE entries SET date = ?, kind = ?, category = ?, amount = ?, note = ?, shop = ? WHERE id = ? AND user_id = ?')
@@ -619,7 +641,7 @@ route('PUT', '/api/entries/:id', ({ user, body, params }) => {
   return { ok: true };
 });
 route('DELETE', '/api/entries/:id', ({ user, params }) => {
-  db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(params.id, user.id);
+  deleteEntry(user.id, params.id);
   return { ok: true };
 });
 // Bisher genutzte Händler mit zuletzt verwendeter Kategorie (für Vorschläge im Formular)
@@ -706,6 +728,9 @@ route('PUT', '/api/debts/:id', ({ user, body, params }) => {
   return { ok: true };
 });
 route('DELETE', '/api/debts/:id', ({ user, params }) => {
+  ownDebt(user.id, params.id);
+  deleteAttachments('debt_payment', db.prepare('SELECT id FROM debt_payments WHERE debt_id = ?').all(params.id).map((r) => r.id));
+  deleteAttachments('debt', [params.id]);
   db.prepare('DELETE FROM debts WHERE id = ? AND user_id = ?').run(params.id, user.id);
   return { ok: true };
 });
@@ -716,16 +741,17 @@ route('POST', '/api/debts/:id/payments', ({ user, body, params }) => {
   const amount = num(body.amount, 'Betrag', { min: 0.01 });
   const note = typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '';
   const entryId = isChecked(body.book) ? bookDebtMovement(user.id, d, type, date, amount, note) : null;
-  db.prepare('INSERT INTO debt_payments (debt_id, date, amount, note, entry_id, type) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(d.id, date, amount, note, entryId, type);
-  return { ok: true };
+  const id = Number(db.prepare('INSERT INTO debt_payments (debt_id, date, amount, note, entry_id, type) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(d.id, date, amount, note, entryId, type).lastInsertRowid);
+  return { ok: true, id };
 });
 route('DELETE', '/api/payments/:id', ({ user, params }) => {
   const p = db.prepare(`SELECT p.* FROM debt_payments p JOIN debts d ON d.id = p.debt_id
     WHERE p.id = ? AND d.user_id = ?`).get(params.id, user.id);
   if (!p) throw new HttpError(404, 'Nicht gefunden.');
+  deleteAttachments('debt_payment', [p.id]);
   db.prepare('DELETE FROM debt_payments WHERE id = ?').run(p.id);
-  if (p.entry_id) db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(p.entry_id, user.id);
+  if (p.entry_id) deleteEntry(user.id, p.entry_id);
   return { ok: true };
 });
 
@@ -771,7 +797,7 @@ route('PUT', '/api/birthdays/:id/gift', ({ user, body, params }) => {
     // bereits gebuchte Ausgabe an den neuen Preis anpassen
     db.prepare('UPDATE entries SET amount = ? WHERE id = ? AND user_id = ?').run(price, entryId, user.id);
   } else if (entryId && price <= 0) {
-    db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(entryId, user.id);
+    deleteEntry(user.id, entryId);
     entryId = null;
   } else if (!entryId && bought && price > 0 && (body.book === true || body.book === 'on')) {
     const t = todayParts();
@@ -807,10 +833,10 @@ route('GET', '/api/export.csv', ({ user, res }) => {
     if (!b.gifts.length) rows.push(['Geburtstag', b.name, date, '', '', '', '', '']);
     for (const g of b.gifts) rows.push(['Geburtstag', b.name, date, g.year, g.idea, g.budget, g.price, g.status]);
   }
-  rows.push([], ['Zekât-Jahr', 'Art', 'Datum', 'Betrag', 'Empfänger', 'Notiz', 'Soll im Jahr', 'Beleg']);
+  rows.push([], ['Zekât-Jahr', 'Art', 'Datum', 'Betrag', 'Empfänger', 'Notiz', 'Soll im Jahr', 'Belege']);
   for (const y of zakatFor(user.id).years) {
     if (!y.payments.length) rows.push([y.label, '', '', '', '', '', y.due, '']);
-    for (const p of y.payments) rows.push([y.label, ZAKAT_KINDS[p.kind], p.date, p.amount, p.recipient, p.note, y.due, p.hasFile ? 'ja' : '']);
+    for (const p of y.payments) rows.push([y.label, ZAKAT_KINDS[p.kind], p.date, p.amount, p.recipient, p.note, y.due, p.files || '']);
   }
   const csv = '\uFEFF' + rows.map((r) => r.map(esc).join(';')).join('\r\n');
   res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="haushaltsbuch.csv"' });
@@ -824,8 +850,8 @@ function zakatFor(userId) {
   const payStmt = db.prepare('SELECT * FROM zakat_payments WHERE year_id = ? ORDER BY date DESC, id DESC');
   const list = years.map((y) => {
     const payments = payStmt.all(y.id).map((p) => {
-      const { file_path: filePath, ...rest } = p;
-      return { ...rest, hasFile: !!filePath };
+      const { file_path: _p, file_name: _n, file_type: _t, ...rest } = p;
+      return { ...rest, files: attCount('zakat_payment', p.id) };
     });
     const sum = (k) => round2(payments.filter((p) => p.kind === k).reduce((s, p) => s + p.amount, 0));
     const paid = sum('zekat');
@@ -851,7 +877,7 @@ function ownZakatPayment(userId, id) {
 }
 function removeFile(rel) {
   if (!rel) return;
-  fs.rm(path.join(FILES_DIR, path.basename(rel)), { force: true }, () => {});
+  try { fs.rmSync(path.join(FILES_DIR, path.basename(rel)), { force: true }); } catch (err) { console.error(err); }
 }
 function zakatYearFields(body) {
   const calcNums = {};
@@ -883,7 +909,7 @@ route('PUT', '/api/zakat/years/:id', ({ user, body, params }) => {
 });
 route('DELETE', '/api/zakat/years/:id', ({ user, params }) => {
   ownZakatYear(user.id, params.id);
-  for (const p of db.prepare('SELECT file_path FROM zakat_payments WHERE year_id = ?').all(params.id)) removeFile(p.file_path);
+  deleteAttachments('zakat_payment', db.prepare('SELECT id FROM zakat_payments WHERE year_id = ?').all(params.id).map((r) => r.id));
   db.prepare('DELETE FROM zakat_years WHERE id = ? AND user_id = ?').run(params.id, user.id);
   return { ok: true };
 });
@@ -905,14 +931,48 @@ route('POST', '/api/zakat/years/:id/payments', ({ user, body, params }) => {
 });
 route('DELETE', '/api/zakat/payments/:id', ({ user, params }) => {
   const p = ownZakatPayment(user.id, params.id);
-  removeFile(p.file_path);
+  deleteAttachments('zakat_payment', [p.id]);
   db.prepare('DELETE FROM zakat_payments WHERE id = ?').run(p.id);
-  if (p.entry_id) db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(p.entry_id, user.id);
+  if (p.entry_id) deleteEntry(user.id, p.entry_id);
   return { ok: true };
 });
-// Beleg (Foto oder PDF) zu einer Zahlung hochladen / anzeigen / entfernen
-route('POST', '/api/zakat/payments/:id/file', ({ user, params, body, req }) => {
-  const p = ownZakatPayment(user.id, params.id);
+// ---------- Belege (Fotos & PDFs) ----------
+const ATT_OWNER_SQL = {
+  entry: 'SELECT 1 FROM entries WHERE id = ? AND user_id = ?',
+  debt: 'SELECT 1 FROM debts WHERE id = ? AND user_id = ?',
+  debt_payment: 'SELECT 1 FROM debt_payments p JOIN debts d ON d.id = p.debt_id WHERE p.id = ? AND d.user_id = ?',
+  zakat_payment: 'SELECT 1 FROM zakat_payments p JOIN zakat_years y ON y.id = p.year_id WHERE p.id = ? AND y.user_id = ?',
+};
+const MAX_FILES_PER_ITEM = 20;
+function attOwner(userId, query) {
+  const type = query.get('type');
+  const id = Number(query.get('id'));
+  if (!ATT_OWNER_SQL[type] || !Number.isInteger(id)) throw new HttpError(400, 'Ungültiger Eintrag.');
+  if (!db.prepare(ATT_OWNER_SQL[type]).get(id, userId)) throw new HttpError(404, 'Nicht gefunden.');
+  return { type, id };
+}
+function attCount(type, id) {
+  return db.prepare('SELECT COUNT(*) AS n FROM attachments WHERE owner_type = ? AND owner_id = ?').get(type, id).n;
+}
+function deleteAttachments(type, ids) {
+  for (const id of ids) {
+    for (const a of db.prepare('SELECT file_path FROM attachments WHERE owner_type = ? AND owner_id = ?').all(type, id)) removeFile(a.file_path);
+    db.prepare('DELETE FROM attachments WHERE owner_type = ? AND owner_id = ?').run(type, id);
+  }
+}
+function deleteEntry(userId, id) {
+  if (!id) return;
+  const r = db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(id, userId);
+  if (r.changes) deleteAttachments('entry', [id]);
+}
+route('GET', '/api/attachments', ({ user, query }) => {
+  const o = attOwner(user.id, query);
+  return db.prepare(`SELECT id, file_name, file_type, created_at FROM attachments
+    WHERE owner_type = ? AND owner_id = ? ORDER BY id`).all(o.type, o.id);
+});
+route('POST', '/api/attachments', ({ user, query, body, req }) => {
+  const o = attOwner(user.id, query);
+  if (attCount(o.type, o.id) >= MAX_FILES_PER_ITEM) throw new HttpError(400, `Maximal ${MAX_FILES_PER_ITEM} Belege pro Eintrag.`);
   const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   if (!UPLOAD_TYPES[type]) throw new HttpError(415, 'Nur Fotos (JPG, PNG, WEBP, HEIC) oder PDF erlaubt.');
   if (!body.length) throw new HttpError(400, 'Datei ist leer.');
@@ -925,30 +985,31 @@ route('POST', '/api/zakat/payments/:id/file', ({ user, params, body, req }) => {
   fs.mkdirSync(FILES_DIR, { recursive: true });
   const fileName = crypto.randomBytes(16).toString('hex') + UPLOAD_TYPES[type];
   fs.writeFileSync(path.join(FILES_DIR, fileName), body);
-  removeFile(p.file_path);
   let original = 'beleg';
   try { original = decodeURIComponent(String(req.headers['x-file-name'] || 'beleg')); } catch { /* Standardname */ }
   original = original.replace(/[^\w.\- äöüÄÖÜß()]/g, '_').slice(0, 100) || 'beleg';
-  db.prepare('UPDATE zakat_payments SET file_name = ?, file_type = ?, file_path = ? WHERE id = ?').run(original, type, fileName, p.id);
-  return { ok: true };
+  const id = Number(db.prepare(`INSERT INTO attachments (user_id, owner_type, owner_id, file_name, file_type, file_path)
+    VALUES (?, ?, ?, ?, ?, ?)`).run(user.id, o.type, o.id, original, type, fileName).lastInsertRowid);
+  return { ok: true, id };
 }, { raw: true });
-route('GET', '/api/zakat/payments/:id/file', ({ user, params, res }) => {
-  const p = ownZakatPayment(user.id, params.id);
-  if (!p.file_path) throw new HttpError(404, 'Kein Beleg vorhanden.');
-  const full = path.join(FILES_DIR, path.basename(p.file_path));
+route('GET', '/api/files/:id', ({ user, params, res }) => {
+  const a = db.prepare('SELECT * FROM attachments WHERE id = ? AND user_id = ?').get(params.id, user.id);
+  if (!a) throw new HttpError(404, 'Nicht gefunden.');
+  const full = path.join(FILES_DIR, path.basename(a.file_path));
   if (!fs.existsSync(full)) throw new HttpError(404, 'Datei nicht gefunden.');
   res.writeHead(200, {
-    'Content-Type': p.file_type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store',
+    'Content-Type': a.file_type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=86400',
     'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; object-src 'self'",
-    'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(p.file_name || 'beleg')}`,
+    'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(a.file_name)}`,
   });
   fs.createReadStream(full).pipe(res);
   return undefined;
 });
-route('DELETE', '/api/zakat/payments/:id/file', ({ user, params }) => {
-  const p = ownZakatPayment(user.id, params.id);
-  removeFile(p.file_path);
-  db.prepare('UPDATE zakat_payments SET file_name = NULL, file_type = NULL, file_path = NULL WHERE id = ?').run(p.id);
+route('DELETE', '/api/files/:id', ({ user, params }) => {
+  const a = db.prepare('SELECT * FROM attachments WHERE id = ? AND user_id = ?').get(params.id, user.id);
+  if (!a) throw new HttpError(404, 'Nicht gefunden.');
+  removeFile(a.file_path);
+  db.prepare('DELETE FROM attachments WHERE id = ?').run(a.id);
   return { ok: true };
 });
 
