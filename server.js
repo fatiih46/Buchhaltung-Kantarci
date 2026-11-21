@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS gifts (
 // Spalten nachrüsten, falls die Datenbank aus einer älteren Version stammt
 const hasColumn = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
 if (!hasColumn('fixed_costs', 'kind')) db.exec("ALTER TABLE fixed_costs ADD COLUMN kind TEXT NOT NULL DEFAULT 'fix'");
+if (!hasColumn('debt_payments', 'type')) db.exec("ALTER TABLE debt_payments ADD COLUMN type TEXT NOT NULL DEFAULT 'zahlung'");
 if (!hasColumn('entries', 'shop')) db.exec("ALTER TABLE entries ADD COLUMN shop TEXT NOT NULL DEFAULT ''");
 
 const CATEGORIES = [
@@ -240,10 +241,13 @@ function debtsFor(userId) {
   const payStmt = db.prepare('SELECT * FROM debt_payments WHERE debt_id = ? ORDER BY date DESC, id DESC');
   return debts.map((d) => {
     const payments = payStmt.all(d.id).map((p) => ({ ...p }));
-    const paid = round2(payments.reduce((s, p) => s + p.amount, 0));
-    const remaining = round2(d.amount - paid);
+    // "zahlung" = Rückzahlung (Betrag wird kleiner), "erhoehung" = weiteres Geld geliehen/verliehen (Betrag wird größer)
+    const paid = round2(payments.filter((p) => p.type !== 'erhoehung').reduce((s, p) => s + p.amount, 0));
+    const increased = round2(payments.filter((p) => p.type === 'erhoehung').reduce((s, p) => s + p.amount, 0));
+    const total = round2(d.amount + increased);
+    const remaining = round2(total - paid);
     const monthsLeft = d.monthly_rate > 0 && remaining > 0 ? Math.ceil(remaining / d.monthly_rate) : null;
-    return { ...d, in_budget: !!d.in_budget, payments, paid, remaining, done: remaining <= 0, monthsLeft };
+    return { ...d, in_budget: !!d.in_budget, payments, paid, increased, total, remaining, done: remaining <= 0, monthsLeft };
   });
 }
 
@@ -616,10 +620,36 @@ function ownDebt(userId, id) {
   return d;
 }
 route('GET', '/api/debts', ({ user }) => debtsFor(user.id));
+// Geldbewegung für Schuld/Forderung als Einnahme bzw. Ausgabe im Monat buchen
+function bookDebtMovement(userId, d, type, date, amount, note) {
+  const isDebt = d.direction === 'schuld';
+  const increase = type === 'erhoehung';
+  // Geld fließt zu mir: Schuld wird größer (geliehen bekommen) oder Forderung wird kleiner (zurückbekommen)
+  const incoming = isDebt ? increase : !increase;
+  const text = isDebt
+    ? (increase ? `Geliehen von ${d.person}` : `Rückzahlung an ${d.person}`)
+    : (increase ? `Verliehen an ${d.person}` : `Rückzahlung von ${d.person}`);
+  return bookEntry(userId, {
+    date, amount, shop: d.person,
+    kind: incoming ? 'weniger' : 'mehr',
+    category: isDebt && !increase ? 'Schulden & Raten' : 'Geliehenes / Rückzahlungen',
+    note: `${text}${note ? ' – ' + note : ''}`,
+  });
+}
+const isChecked = (v) => v === true || v === 'on' || v === '1';
+
 route('POST', '/api/debts', ({ user, body }) => {
-  db.prepare(`INSERT INTO debts (direction, person, title, amount, start_date, due_date, monthly_rate, in_budget, note, user_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...debtFields(body), user.id);
-  return { ok: true };
+  const fields = debtFields(body);
+  const id = Number(db.prepare(`INSERT INTO debts (direction, person, title, amount, start_date, due_date, monthly_rate, in_budget, note, user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...fields, user.id).lastInsertRowid);
+  if (isChecked(body.book)) {
+    const d = ownDebt(user.id, id);
+    const t = todayParts();
+    const date = d.start_date || `${t.y}-${String(t.m).padStart(2, '0')}-${String(t.d).padStart(2, '0')}`;
+    // Der Anfangsbetrag ist wie eine "Erhöhung" von 0 aus: Geld bekommen (Schuld) bzw. Geld weggegeben (Forderung)
+    bookDebtMovement(user.id, d, 'erhoehung', date, d.amount, d.title);
+  }
+  return { ok: true, id };
 });
 route('PUT', '/api/debts/:id', ({ user, body, params }) => {
   ownDebt(user.id, params.id);
@@ -633,21 +663,13 @@ route('DELETE', '/api/debts/:id', ({ user, params }) => {
 });
 route('POST', '/api/debts/:id/payments', ({ user, body, params }) => {
   const d = ownDebt(user.id, params.id);
+  const type = body.type === 'erhoehung' ? 'erhoehung' : 'zahlung';
   const date = dateStr(body.date);
   const amount = num(body.amount, 'Betrag', { min: 0.01 });
   const note = typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '';
-  let entryId = null;
-  if (body.book === true || body.book === 'on') {
-    const isDebt = d.direction === 'schuld';
-    entryId = bookEntry(user.id, {
-      date, amount, shop: d.person,
-      kind: isDebt ? 'mehr' : 'weniger',
-      category: isDebt ? 'Schulden & Raten' : 'Geliehenes / Rückzahlungen',
-      note: `${isDebt ? 'Rückzahlung an' : 'Rückzahlung von'} ${d.person}${note ? ' – ' + note : ''}`,
-    });
-  }
-  db.prepare('INSERT INTO debt_payments (debt_id, date, amount, note, entry_id) VALUES (?, ?, ?, ?, ?)')
-    .run(d.id, date, amount, note, entryId);
+  const entryId = isChecked(body.book) ? bookDebtMovement(user.id, d, type, date, amount, note) : null;
+  db.prepare('INSERT INTO debt_payments (debt_id, date, amount, note, entry_id, type) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(d.id, date, amount, note, entryId, type);
   return { ok: true };
 });
 route('DELETE', '/api/payments/:id', ({ user, params }) => {
@@ -728,9 +750,9 @@ route('GET', '/api/export.csv', ({ user, res }) => {
     rows.push([f.kind === 'budget' ? 'Budget' : 'Fixkosten', f.name, f.category, f.amount, f.interval, f.share, '', '']);
   for (const e of db.prepare('SELECT * FROM entries WHERE user_id = ? ORDER BY date').all(user.id))
     rows.push([e.kind === 'mehr' ? 'Ausgabe' : 'Einnahme/Erstattung', e.note, e.category, e.amount, '', '', e.date, e.shop]);
-  rows.push([], ['Typ', 'Person', 'Bezeichnung', 'Betrag', 'Bezahlt', 'Offen', 'Rate/Monat', 'Fällig']);
+  rows.push([], ['Typ', 'Person', 'Bezeichnung', 'Betrag gesamt', 'Zurückgezahlt', 'Offen', 'Rate/Monat', 'Fällig']);
   for (const d of debtsFor(user.id))
-    rows.push([d.direction === 'schuld' ? 'Schuld' : 'Forderung', d.person, d.title, d.amount, d.paid, d.remaining, d.monthly_rate, d.due_date || '']);
+    rows.push([d.direction === 'schuld' ? 'Schuld' : 'Forderung', d.person, d.title, d.total, d.paid, d.remaining, d.monthly_rate, d.due_date || '']);
   rows.push([], ['Geburtstag', 'Name', 'Datum', 'Jahr', 'Geschenk', 'Budget', 'Preis', 'Status']);
   for (const b of birthdaysFor(user.id)) {
     const date = `${String(b.day).padStart(2, '0')}.${String(b.month).padStart(2, '0')}.${b.year || ''}`;

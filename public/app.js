@@ -364,7 +364,10 @@ const dlg = $('#dlg');
 let dlgHandlers = null;
 function openDialog({ title, html, onSave, onDelete, onOpen }) {
   $('#dlgTitle').textContent = title;
-  $('#dlgBody').innerHTML = html;
+  // frisches Element, damit keine Event-Listener vom vorherigen Dialog übrig bleiben
+  const fresh = $('#dlgBody').cloneNode(false);
+  $('#dlgBody').replaceWith(fresh);
+  fresh.innerHTML = html;
   if (onOpen) onOpen($('#dlgBody'));
   $('#dlgError').textContent = '';
   $('#dlgDelete').hidden = !onDelete;
@@ -512,8 +515,8 @@ $$('[data-list]').forEach((b) => b.addEventListener('click', () => { state.list 
 $('#listAdd').addEventListener('click', () => state.list === 'geburtstag' ? openBirthdayDialog() : openDebtDialog({ direction: state.list }));
 
 const LIST_TEXT = {
-  schuld: { title: 'Meine Schulden', add: 'Schuld', hint: 'Was du noch zurückzahlen musst – Kredite, Ratenkäufe, geliehenes Geld. Mit „Zahlung“ trägst du jede Rückzahlung ein, der offene Betrag rechnet sich selbst.', empty: 'Keine Schulden eingetragen. 🎉' },
-  forderung: { title: 'Bekomme ich zurück', add: 'Forderung', hint: 'Geld, das du verliehen hast oder das dir noch jemand schuldet. Mit „Erhalten“ trägst du Rückzahlungen ein.', empty: 'Niemand schuldet dir etwas.' },
+  schuld: { title: 'Meine Schulden', add: 'Schuld', hint: 'Was du noch zurückzahlen musst – Kredite, Ratenkäufe, geliehenes Geld. Mit „± Eintragen“ erfasst du Teilzahlungen oder wenn du dir noch mehr geliehen hast – der offene Betrag rechnet sich selbst.', empty: 'Keine Schulden eingetragen. 🎉' },
+  forderung: { title: 'Bekomme ich zurück', add: 'Forderung', hint: 'Geld, das du verliehen hast oder das dir noch jemand schuldet. Mit „± Eintragen“ erfasst du Teil-Rückzahlungen oder wenn du noch mehr verliehen hast.', empty: 'Niemand schuldet dir etwas.' },
   geburtstag: { title: 'Geburtstage & Geschenke', add: 'Geburtstag', hint: 'Sortiert nach dem nächsten Geburtstag. Tippe auf eine Person, um das Geschenk für dieses Jahr zu planen.', empty: 'Noch keine Geburtstage eingetragen.' },
 };
 
@@ -538,7 +541,7 @@ async function renderLists() {
     </div>` : '';
   $('#listEmpty').hidden = debts.length > 0;
   $('#listBody').innerHTML = debts.map((d) => {
-    const pct = Math.min(100, (d.paid / d.amount) * 100);
+    const pct = Math.min(100, (d.paid / d.total) * 100);
     const meta = [
       d.monthly_rate > 0 && !d.done ? `Rate ${fmt(d.monthly_rate)}/Monat${d.monthsLeft ? ` · noch ca. ${d.monthsLeft} Monat${d.monthsLeft === 1 ? '' : 'e'}` : ''}` : '',
       d.due_date && !d.done ? `fällig ${fmtDate(d.due_date)}` : '',
@@ -547,12 +550,14 @@ async function renderLists() {
     return `<li data-id="${d.id}">
       <div class="grow">
         <div class="title">${esc(d.person)}${d.title ? ` <span class="muted">– ${esc(d.title)}</span>` : ''}</div>
-        <div class="meta">${d.done ? 'vollständig ' + (isDebt ? 'zurückgezahlt' : 'erhalten') : `offen <strong class="num">${fmt(d.remaining)}</strong> von ${fmt(d.amount)}`}</div>
+        <div class="meta">${d.done ? 'vollständig ' + (isDebt ? 'zurückgezahlt' : 'erhalten') : `offen <strong class="num">${fmt(d.remaining)}</strong> von ${fmt(d.total)}`}</div>
+        ${d.increased > 0 ? `<div class="meta">${fmt(d.amount)} + ${fmt(d.increased)} ${isDebt ? 'nachträglich geliehen' : 'nachträglich verliehen'}</div>` : ''}
         ${meta ? `<div class="meta">${meta}</div>` : ''}
         <div class="progress"><i style="width:${pct}%"></i></div>
       </div>
       <div class="row-actions">
-        ${d.done ? '<span class="pill done">erledigt ✓</span>' : `<button type="button" class="btn small" data-pay="${d.id}">${isDebt ? '＋ Zahlung' : '＋ Erhalten'}</button>`}
+        ${d.done ? '<span class="pill done">erledigt ✓</span>' : ''}
+        <button type="button" class="btn small" data-pay="${d.id}">± Eintragen</button>
       </div>
     </li>`;
   }).join('');
@@ -574,7 +579,7 @@ function openDebtDialog(item) {
         <input name="person" required maxlength="120" value="${esc(v('person'))}" placeholder="${isDebt ? 'z. B. Sparkasse, Bruder' : 'z. B. Mehmet'}"></label>
       <label>Wofür? <input name="title" maxlength="120" value="${esc(v('title'))}" placeholder="${isDebt ? 'z. B. Autokredit, Handy-Raten' : 'z. B. für Umzug geliehen'}"></label>
       <div class="row2">
-        ${amountInput(item.amount, 'Gesamtbetrag (€)')}
+        ${amountInput(item.amount, isEdit ? 'Ursprünglicher Betrag (€)' : 'Betrag (€)')}
         <label>Rate / Monat (€) <input name="monthly_rate" inputmode="decimal" value="${item.monthly_rate ? String(item.monthly_rate).replace('.', ',') : ''}" placeholder="optional"></label>
       </div>
       <div class="row2">
@@ -584,14 +589,19 @@ function openDebtDialog(item) {
       ${isDebt ? `<label class="check"><input type="checkbox" name="in_budget" ${item.in_budget ? 'checked' : ''}> Monatliche Rate bei Fixkosten mitrechnen</label>
       <div class="hint">Nur anhaken, wenn du die Rate nicht schon unter „Plan → Fixkosten“ eingetragen hast.</div>` : ''}
       <label>Notiz <input name="note" maxlength="300" value="${esc(v('note'))}"></label>
-      ${isEdit && item.payments.length ? `<div class="subhead">${isDebt ? 'Zahlungen' : 'Erhalten'} (${fmt(item.paid)})</div>
-        <ul class="history">${item.payments.map((p) => `<li>
-          <span>${fmtDate(p.date)}${p.note ? ' · ' + esc(p.note) : ''}${p.entry_id ? ' · <span class="muted">gebucht</span>' : ''}</span>
-          <span class="num">${fmt(p.amount)} <button type="button" class="x-btn" data-del-payment="${p.id}" aria-label="Zahlung löschen">×</button></span>
+      ${!isEdit ? `<label class="check"><input type="checkbox" name="book">
+        ${isDebt ? 'Ich habe das Geld bekommen – als Einnahme buchen' : 'Das Geld ist von mir weggegangen – als Ausgabe buchen'}</label>
+        <div class="hint">${isDebt ? 'Z. B. Bargeld vom Bruder. Nicht anhaken bei Krediten, die direkt an den Händler gingen (Auto, Handy).' : 'Dann siehst du in deiner Monatsrechnung, dass das Geld gerade fehlt – kommt es zurück, wird es wieder gutgeschrieben.'}</div>` : ''}
+      ${isEdit && item.payments.length ? `<div class="subhead">Verlauf · jetzt offen ${fmt(item.remaining)}</div>
+        <ul class="history">
+          <li><span>${item.start_date ? fmtDate(item.start_date) + ' · ' : ''}Anfangsbetrag</span><span class="num">${fmt(item.amount)}</span></li>
+          ${item.payments.slice().reverse().map((p) => `<li>
+          <span>${fmtDate(p.date)} · ${p.type === 'erhoehung' ? (isDebt ? 'mehr geliehen' : 'mehr verliehen') : (isDebt ? 'zurückgezahlt' : 'zurückbekommen')}${p.note ? ' · ' + esc(p.note) : ''}${p.entry_id ? ' · <span class="muted">gebucht</span>' : ''}</span>
+          <span class="num ${p.type === 'erhoehung' ? '' : 'pos'}">${p.type === 'erhoehung' ? '+' : '−'}${fmt(p.amount)} <button type="button" class="x-btn" data-del-payment="${p.id}" aria-label="Eintrag löschen">×</button></span>
         </li>`).join('')}</ul>` : ''}`,
     onOpen: (body) => body.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-del-payment]');
-      if (!btn || !confirm('Diese Zahlung löschen?')) return;
+      if (!btn || !confirm('Diesen Eintrag löschen?')) return;
       await api('DELETE', `/api/payments/${btn.dataset.delPayment}`);
       btn.closest('li').remove();
       render();
@@ -603,19 +613,42 @@ function openDebtDialog(item) {
 
 function openPaymentDialog(debt) {
   const isDebt = debt.direction === 'schuld';
-  const suggest = debt.monthly_rate > 0 ? Math.min(debt.monthly_rate, debt.remaining) : null;
+  const suggest = debt.monthly_rate > 0 && debt.remaining > 0 ? Math.min(debt.monthly_rate, debt.remaining) : null;
+  const L = isDebt
+    ? { zahlung: 'Ich habe zurückgezahlt', zahlungHint: 'Schuld wird kleiner', erhoehung: 'Ich habe mir mehr geliehen', erhoehungHint: 'Schuld wird größer',
+        bookZ: 'Als Ausgabe in diesem Monat buchen', bookE: 'Als Einnahme buchen (ich habe das Geld bekommen)' }
+    : { zahlung: 'Ich habe Geld zurückbekommen', zahlungHint: 'Forderung wird kleiner', erhoehung: 'Ich habe weiteres Geld verliehen', erhoehungHint: 'Forderung wird größer',
+        bookZ: 'Als Einnahme in diesem Monat buchen', bookE: 'Als Ausgabe buchen (das Geld ist weg)' };
   openDialog({
-    title: isDebt ? `Zahlung an ${debt.person}` : `Erhalten von ${debt.person}`,
+    title: `${debt.person}${debt.title ? ' – ' + debt.title : ''}`,
     html: `
-      <p class="muted small" style="margin:0">Noch offen: <strong>${fmt(debt.remaining)}</strong></p>
+      <p class="muted small" style="margin:0">Aktuell offen: <strong>${fmt(debt.remaining)}</strong></p>
+      <fieldset>
+        <legend>Was ist passiert?</legend>
+        <label class="radio"><input type="radio" name="type" value="zahlung" checked> ${L.zahlung} <span class="muted small">(${L.zahlungHint})</span></label>
+        <label class="radio"><input type="radio" name="type" value="erhoehung"> ${L.erhoehung} <span class="muted small">(${L.erhoehungHint})</span></label>
+      </fieldset>
       <div class="row2">
         ${amountInput(suggest)}
         <label>Datum <input type="date" name="date" required value="${todayIso()}"></label>
       </div>
-      <label>Notiz <input name="note" maxlength="200" placeholder="optional"></label>
-      <label class="check"><input type="checkbox" name="book" ${isDebt && debt.in_budget ? '' : 'checked'}>
-        ${isDebt ? 'Als Ausgabe in diesem Monat buchen' : 'Als Einnahme in diesem Monat buchen'}</label>
-      ${isDebt ? `<div class="hint">${debt.in_budget ? 'Die Rate zählt schon bei den Fixkosten – nur für Sonderzahlungen anhaken.' : 'Nicht anhaken, wenn diese Rate schon in deinen Fixkosten steckt.'}</div>` : ''}`,
+      <label>Notiz <input name="note" maxlength="200" placeholder="optional, z. B. bar gegeben"></label>
+      <label class="check"><input type="checkbox" name="book" ${isDebt && debt.in_budget ? '' : 'checked'}> <span id="bookLabel">${L.bookZ}</span></label>
+      <div class="hint" id="bookHint">${isDebt ? (debt.in_budget ? 'Die Rate zählt schon bei den Fixkosten – nur für Sonderzahlungen anhaken.' : 'Nicht anhaken, wenn diese Rate schon in deinen Fixkosten steckt.') : ''}</div>
+      <div class="hint" id="newTotal"></div>`,
+    onOpen: (body) => {
+      const update = () => {
+        const type = $('[name=type]:checked', body).value;
+        const amt = Number(($('[name=amount]', body).value || '0').replace(',', '.')) || 0;
+        $('#bookLabel', body).textContent = type === 'erhoehung' ? L.bookE : L.bookZ;
+        $('#bookHint', body).hidden = type === 'erhoehung';
+        const after = type === 'erhoehung' ? debt.remaining + amt : debt.remaining - amt;
+        $('#newTotal', body).innerHTML = amt ? `Danach offen: <strong>${fmt(Math.max(0, after))}</strong>${after < 0 ? ` (${fmt(-after)} zu viel)` : ''}` : '';
+      };
+      body.addEventListener('change', update);
+      body.addEventListener('input', update);
+      update();
+    },
     onSave: (d) => api('POST', `/api/debts/${debt.id}/payments`, d),
   });
 }

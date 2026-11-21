@@ -193,3 +193,46 @@ test('Budgets, variable Ausgaben mit Händler und Auswertung', async () => {
   assert.ok(st.tips.some((t) => t.title.includes('Kleinkäufe')));
   assert.ok(st.potential > 0);
 });
+
+test('Schulden/Forderungen teilweise erhöhen und zurückzahlen', async () => {
+  const c = client();
+  await c('POST', '/api/register', { name: 'Teil', email: 'teil@example.com', password: 'geheim123' });
+  const month = new Date().toISOString().slice(0, 7);
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Ich verleihe 100 € an Mehmet, Geld ist weg -> Ausgabe
+  const r = await c('POST', '/api/debts', { direction: 'forderung', person: 'Mehmet', amount: '100', book: 'on' });
+  const id = r.data.id;
+  let s = (await c('GET', '/api/summary?month=' + month)).data;
+  assert.equal(s.spent, 100);
+
+  // nochmal 50 € verliehen, 30 € zurückbekommen, 20 € zurückbekommen
+  await c('POST', `/api/debts/${id}/payments`, { type: 'erhoehung', date: today, amount: '50', book: 'on' });
+  await c('POST', `/api/debts/${id}/payments`, { type: 'zahlung', date: today, amount: '30', book: 'on' });
+  await c('POST', `/api/debts/${id}/payments`, { date: today, amount: '20' });
+  let d = (await c('GET', '/api/debts')).data[0];
+  assert.equal(d.total, 150);
+  assert.equal(d.paid, 50);
+  assert.equal(d.remaining, 100);
+  s = (await c('GET', '/api/summary?month=' + month)).data;
+  assert.equal(s.spent, 150);
+  assert.equal(s.refunds, 30);
+  assert.equal(s.receivablesOpen, 100);
+
+  // Erhöhung löschen -> Betrag und Buchung verschwinden
+  const inc = d.payments.find((p) => p.type === 'erhoehung');
+  await c('DELETE', `/api/payments/${inc.id}`);
+  d = (await c('GET', '/api/debts')).data[0];
+  assert.equal(d.remaining, 50);
+  assert.equal((await c('GET', '/api/summary?month=' + month)).data.spent, 100);
+
+  // Schuld: vom Bruder geliehen (Einnahme), dann mehr geliehen
+  const r2 = await c('POST', '/api/debts', { direction: 'schuld', person: 'Bruder', amount: '500', book: 'on' });
+  await c('POST', `/api/debts/${r2.data.id}/payments`, { type: 'erhoehung', date: today, amount: '200', book: 'on' });
+  await c('POST', `/api/debts/${r2.data.id}/payments`, { type: 'zahlung', date: today, amount: '100', book: 'on' });
+  const b = (await c('GET', '/api/debts')).data.find((x) => x.person === 'Bruder');
+  assert.equal(b.remaining, 600);
+  s = (await c('GET', '/api/summary?month=' + month)).data;
+  assert.equal(s.debtsOpen, 600);
+  assert.equal(s.refunds, 30 + 500 + 200);
+});

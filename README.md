@@ -17,9 +17,11 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
   6 Monate, größte Ausgaben, Vergleich mit dem Durchschnitt, Kleinkäufe, Sparquote und konkrete Spartipps.
 - **Listen** (eigener Reiter):
   - **Schulden** – was ich noch zurückzahlen muss (Kredite, Ratenkäufe, geliehenes Geld): Gesamtbetrag,
-    monatliche Rate, Fälligkeit, Zahlungen. Offener Betrag und Restlaufzeit werden automatisch berechnet.
+    monatliche Rate, Fälligkeit. Mit „± Eintragen“ erfasst man Teilzahlungen (Betrag wird kleiner) oder
+    weiteres geliehenes Geld (Betrag wird größer). Offener Betrag, Verlauf und Restlaufzeit werden automatisch berechnet.
     Die Rate kann optional automatisch bei den Fixkosten mitgezählt werden.
-  - **Forderungen** – was ich zurückbekomme: wer, wie viel, was schon zurückgezahlt wurde.
+  - **Forderungen** – was ich zurückbekomme: wer, wie viel, was schon zurückgezahlt wurde – ebenfalls mit
+    Teil-Rückzahlungen und „noch mehr verliehen“.
   - **Geburtstage & Geschenke** – sortiert nach dem nächsten Geburtstag, mit Alter, Geschenkidee, Budget,
     Preis und Status (Idee → gekauft → verschenkt), frühere Geschenke bleiben als Verlauf erhalten.
   - Zahlungen und gekaufte Geschenke lassen sich per Häkchen direkt als Ausgabe/Einnahme im Monat buchen.
