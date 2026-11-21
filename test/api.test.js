@@ -14,7 +14,7 @@ after(() => new Promise((r) => server.close(r)));
 
 function client() {
   let cookie = '';
-  return async (method, url, body) => {
+  const fn = async (method, url, body) => {
     const res = await fetch(base + url, {
       method,
       headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) },
@@ -24,6 +24,8 @@ function client() {
     if (set) cookie = set.split(';')[0];
     return { status: res.status, data: await res.json().catch(() => null) };
   };
+  fn.cookie = () => cookie;
+  return fn;
 }
 
 test('zwei Konten in einem Haushalt, getrennte Daten, richtige Berechnung', async () => {
@@ -235,4 +237,73 @@ test('Schulden/Forderungen teilweise erhöhen und zurückzahlen', async () => {
   s = (await c('GET', '/api/summary?month=' + month)).data;
   assert.equal(s.debtsOpen, 600);
   assert.equal(s.refunds, 30 + 500 + 200);
+});
+
+test('Zekât: Soll, Teilzahlungen, Fitre/Sadaka, Belege', async () => {
+  const c = client();
+  await c('POST', '/api/register', { name: 'Zekat', email: 'zekat@example.com', password: 'geheim123' });
+  const today = new Date().toISOString().slice(0, 10);
+
+  const y = (await c('POST', '/api/zakat/years', { label: '2026', due: '1250', calc: { cash: '40000', gold: '10000', nisab: '7000' } })).data;
+  assert.ok(y.id);
+  const p1 = (await c('POST', `/api/zakat/years/${y.id}/payments`, { date: today, amount: '500', recipient: 'Moschee', book: 'on' })).data;
+  await c('POST', `/api/zakat/years/${y.id}/payments`, { date: today, amount: '300', recipient: 'Familie in der Türkei' });
+  await c('POST', `/api/zakat/years/${y.id}/payments`, { date: today, amount: '40', kind: 'fitre' });
+  await c('POST', '/api/zakat/years', { label: '2025', due: '1000' });
+  const y25 = (await c('GET', '/api/zakat')).data.years.find((x) => x.label === '2025');
+  await c('POST', `/api/zakat/years/${y25.id}/payments`, { date: '2025-03-01', amount: '1000' });
+
+  let z = (await c('GET', '/api/zakat')).data;
+  const cur = z.years.find((x) => x.label === '2026');
+  assert.equal(z.years[0].label, '2026');
+  assert.equal(cur.paid, 800);
+  assert.equal(cur.remaining, 450);
+  assert.equal(cur.fitre, 40);
+  assert.equal(cur.calc.cash, 40000);
+  assert.equal(z.totals.paid, 1800);
+  assert.equal(z.totals.open, 450);
+  assert.ok(z.years.find((x) => x.label === '2025').done);
+
+  const s = (await c('GET', '/api/summary?month=' + today.slice(0, 7))).data;
+  assert.equal(s.zakatOpen, 450);
+  assert.equal(s.spent, 500);
+
+  // Beleg hochladen (PDF) und abrufen
+  const upload = (type, data) => fetch(`${base}/api/zakat/payments/${p1.id}/file`, {
+    method: 'POST', headers: { 'Content-Type': type, 'X-File-Name': encodeURIComponent('Quittung Moschee.pdf'), Cookie: c.cookie() }, body: data,
+  });
+  assert.equal((await upload('application/pdf', Buffer.from('nicht wirklich'))).status, 415);
+  assert.equal((await upload('text/html', Buffer.from('<script>'))).status, 415);
+  assert.equal((await upload('application/pdf', Buffer.from('%PDF-1.4 test'))).status, 200);
+  z = (await c('GET', '/api/zakat')).data;
+  const pay = z.years[0].payments.find((p) => p.id === p1.id);
+  assert.ok(pay.hasFile);
+  assert.equal(pay.file_name, 'Quittung Moschee.pdf');
+  assert.equal(pay.file_path, undefined, 'Speicherpfad wird nicht ausgeliefert');
+  const f = await fetch(`${base}/api/zakat/payments/${p1.id}/file`, { headers: { Cookie: c.cookie() } });
+  assert.equal(f.status, 200);
+  assert.equal(f.headers.get('content-type'), 'application/pdf');
+  assert.equal(await f.text(), '%PDF-1.4 test');
+
+  // Fremde Person kommt nicht an den Beleg
+  const other = client();
+  await other('POST', '/api/register', { name: 'Fremd2', email: 'fremd2@example.com', password: 'geheim123' });
+  assert.equal((await fetch(`${base}/api/zakat/payments/${p1.id}/file`, { headers: { Cookie: other.cookie() } })).status, 404);
+  assert.equal((await other('DELETE', `/api/zakat/payments/${p1.id}`)).status, 404);
+
+  // Zahlung löschen -> Summe und Buchung aktualisieren sich
+  await c('DELETE', `/api/zakat/payments/${p1.id}`);
+  z = (await c('GET', '/api/zakat')).data;
+  assert.equal(z.years.find((x) => x.label === '2026').remaining, 950);
+  assert.equal((await c('GET', '/api/summary?month=' + today.slice(0, 7))).data.spent, 0);
+});
+
+test('Beträge in deutscher Schreibweise', async () => {
+  const c = client();
+  await c('POST', '/api/register', { name: 'Format', email: 'format@example.com', password: 'geheim123' });
+  for (const [input, expected] of [['1.400', 1400], ['1.400,50', 1400.5], ['38.500', 38500], ['12,5', 12.5], ['12.5', 12.5], ['99,99 €', 99.99], ['1.234.567,8', 1234567.8]]) {
+    await c('POST', '/api/incomes', { name: input, amount: input });
+    const inc = (await c('GET', '/api/incomes')).data.find((i) => i.name === input);
+    assert.equal(inc.amount, expected, input);
+  }
 });

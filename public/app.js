@@ -5,6 +5,14 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const eur = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
 const fmt = (n) => eur.format(n || 0);
+// gleiche Logik wie auf dem Server: "1.400,50" -> 1400.5, "38.500" -> 38500
+function parseAmount(v) {
+  const t = String(v ?? '').trim().replace(/\s|€/g, '');
+  if (!t) return 0;
+  if (t.includes(',')) return Number(t.replace(/\./g, '').replace(',', '.')) || 0;
+  if (/^\d{1,3}(\.\d{3})+$/.test(t)) return Number(t.replace(/\./g, '')) || 0;
+  return Number(t) || 0;
+}
 const INTERVAL_LABEL = { 1: 'monatlich', 3: 'vierteljährlich', 6: 'halbjährlich', 12: 'jährlich' };
 
 const state = {
@@ -490,12 +498,13 @@ const GIFT_STATUS = { offen: 'noch offen', idee: 'Idee', gekauft: 'gekauft', ver
 const inDays = (n) => n === 0 ? 'heute' : n === 1 ? 'morgen' : `in ${n} Tagen`;
 
 function renderTeaser(s) {
-  const show = s.debtsOpen > 0 || s.receivablesOpen > 0 || s.upcomingBirthdays.length > 0;
+  const show = s.debtsOpen > 0 || s.receivablesOpen > 0 || s.zakatOpen > 0 || s.upcomingBirthdays.length > 0;
   $('#listsTeaser').hidden = !show;
   if (!show) return;
   $('#teaserCalc').innerHTML =
     (s.debtsOpen > 0 ? `<dt>Offene Schulden</dt><dd class="neg">${fmt(s.debtsOpen)}</dd>` : '') +
-    (s.receivablesOpen > 0 ? `<dt>Bekomme ich zurück</dt><dd class="pos">${fmt(s.receivablesOpen)}</dd>` : '');
+    (s.receivablesOpen > 0 ? `<dt>Bekomme ich zurück</dt><dd class="pos">${fmt(s.receivablesOpen)}</dd>` : '') +
+    (s.zakatOpen > 0 ? `<dt>Zekât noch zu geben</dt><dd>${fmt(s.zakatOpen)}</dd>` : '');
   $('#teaserBirthdays').innerHTML = s.upcomingBirthdays.map((b) => `
     <li data-goto-lists="geburtstag">
       <div class="main"><div class="title">🎂 ${esc(b.name)}${b.turns ? ` (wird ${b.turns})` : ''}</div>
@@ -512,11 +521,16 @@ document.addEventListener('click', (e) => {
 });
 
 $$('[data-list]').forEach((b) => b.addEventListener('click', () => { state.list = b.dataset.list; renderLists(); }));
-$('#listAdd').addEventListener('click', () => state.list === 'geburtstag' ? openBirthdayDialog() : openDebtDialog({ direction: state.list }));
+$('#listAdd').addEventListener('click', () => {
+  if (state.list === 'geburtstag') openBirthdayDialog();
+  else if (state.list === 'zekat') openZakatYearDialog();
+  else openDebtDialog({ direction: state.list });
+});
 
 const LIST_TEXT = {
   schuld: { title: 'Meine Schulden', add: 'Schuld', hint: 'Was du noch zurückzahlen musst – Kredite, Ratenkäufe, geliehenes Geld. Mit „± Eintragen“ erfasst du Teilzahlungen oder wenn du dir noch mehr geliehen hast – der offene Betrag rechnet sich selbst.', empty: 'Keine Schulden eingetragen. 🎉' },
   forderung: { title: 'Bekomme ich zurück', add: 'Forderung', hint: 'Geld, das du verliehen hast oder das dir noch jemand schuldet. Mit „± Eintragen“ erfasst du Teil-Rückzahlungen oder wenn du noch mehr verliehen hast.', empty: 'Niemand schuldet dir etwas.' },
+  zekat: { title: 'Zekât', add: 'Jahr', hint: 'Pro Jahr: wie viel Zekât du geben musst, was du schon gegeben hast und was noch offen ist. Alle Zahlungen mit Belegen bleiben als Dokumentation über die Jahre erhalten.', empty: 'Noch kein Zekât-Jahr angelegt. Tippe auf „＋ Neu“.' },
   geburtstag: { title: 'Geburtstage & Geschenke', add: 'Geburtstag', hint: 'Sortiert nach dem nächsten Geburtstag. Tippe auf eine Person, um das Geschenk für dieses Jahr zu planen.', empty: 'Noch keine Geburtstage eingetragen.' },
 };
 
@@ -527,6 +541,7 @@ async function renderLists() {
   $('#listHint').textContent = t.hint;
   $('#listEmpty').textContent = t.empty;
   if (state.list === 'geburtstag') return renderBirthdays();
+  if (state.list === 'zekat') return renderZakat();
 
   const all = await api('GET', '/api/debts');
   const debts = all.filter((d) => d.direction === state.list).sort((a, b) => a.done - b.done);
@@ -639,7 +654,7 @@ function openPaymentDialog(debt) {
     onOpen: (body) => {
       const update = () => {
         const type = $('[name=type]:checked', body).value;
-        const amt = Number(($('[name=amount]', body).value || '0').replace(',', '.')) || 0;
+        const amt = parseAmount($('[name=amount]', body).value);
         $('#bookLabel', body).textContent = type === 'erhoehung' ? L.bookE : L.bookZ;
         $('#bookHint', body).hidden = type === 'erhoehung';
         const after = type === 'erhoehung' ? debt.remaining + amt : debt.remaining - amt;
@@ -728,6 +743,238 @@ function openBirthdayDialog(item) {
     },
     onDelete: isEdit && (() => api('DELETE', `/api/birthdays/${item.id}`)),
   });
+}
+
+// ---------- Zekât ----------
+const ZAKAT_KIND = { zekat: 'Zekât', fitre: 'Fitre', sadaka: 'Sadaka' };
+let zakatCache = null;
+
+async function renderZakat() {
+  const z = await api('GET', '/api/zakat');
+  zakatCache = z;
+  const t = z.totals;
+  const belege = z.years.reduce((s, y) => s + y.payments.filter((p) => p.hasFile).length, 0);
+  $('#listSummary').innerHTML = z.years.length ? `<div class="summary-row">
+      <div><small>Noch zu geben</small><strong class="${t.open > 0 ? 'neg' : 'pos'}">${fmt(t.open)}</strong></div>
+      <div><small>Zekât gegeben (alle Jahre)</small><strong>${fmt(t.paid)}</strong></div>
+      ${t.fitre || t.sadaka ? `<div><small>Fitre / Sadaka</small><strong>${fmt(t.fitre + t.sadaka)}</strong></div>` : ''}
+    </div>
+    <div class="doc-row">
+      <span class="muted small">📁 Dokumentation: ${z.years.length} Jahr${z.years.length === 1 ? '' : 'e'}, ${z.years.reduce((s, y) => s + y.payments.length, 0)} Zahlungen, ${belege} Beleg${belege === 1 ? '' : 'e'}</span>
+      <button type="button" class="btn small" id="zakatReport">📄 Nachweis drucken / PDF</button>
+    </div>` : '';
+  $('#listEmpty').hidden = z.years.length > 0;
+  $('#listBody').innerHTML = z.years.map((y) => {
+    const pct = y.due > 0 ? Math.min(100, (y.paid / y.due) * 100) : 0;
+    const extra = [y.fitre ? `Fitre ${fmt(y.fitre)}` : '', y.sadaka ? `Sadaka ${fmt(y.sadaka)}` : ''].filter(Boolean).join(' · ');
+    const files = y.payments.filter((p) => p.hasFile).length;
+    return `<li data-id="${y.id}">
+      <div class="date-badge year"><b>${esc(y.label)}</b></div>
+      <div class="grow">
+        <div class="title">Zekât ${esc(y.label)}</div>
+        <div class="meta">${y.due > 0 ? `gegeben <strong class="num">${fmt(y.paid)}</strong> von ${fmt(y.due)}` : `gegeben ${fmt(y.paid)} · Betrag noch nicht festgelegt`}</div>
+        <div class="meta">${y.done ? 'vollständig gegeben' : y.due > 0 ? `noch offen <strong class="num neg">${fmt(y.remaining)}</strong>` : ''}${y.due_date && !y.done ? ` · bis ${fmtDate(y.due_date)}` : ''}</div>
+        ${extra || files ? `<div class="meta">${extra}${extra && files ? ' · ' : ''}${files ? `📎 ${files} Beleg${files === 1 ? '' : 'e'}` : ''}</div>` : ''}
+        ${y.due > 0 ? `<div class="progress"><i style="width:${pct}%"></i></div>` : ''}
+      </div>
+      <div class="row-actions">
+        ${y.done ? '<span class="pill done">erledigt ✓</span>' : ''}
+        <button type="button" class="btn small" data-zpay="${y.id}">＋ Zahlung</button>
+      </div>
+    </li>`;
+  }).join('');
+  $$('#listBody li[data-id]').forEach((li) => li.addEventListener('click', (e) => {
+    const y = z.years.find((x) => x.id === Number(li.dataset.id));
+    if (e.target.closest('[data-zpay]')) openZakatPaymentDialog(y); else openZakatYearDialog(y);
+  }));
+  $('#zakatReport')?.addEventListener('click', () => openZakatReport(z));
+}
+
+const CALC_FIELDS = [
+  ['cash', 'Bargeld & Bankkonten'], ['gold', 'Gold & Silber (Wert in €)'], ['other', 'Aktien, Fonds, sonstige Ersparnisse'],
+  ['receivables', 'Forderungen (Geld, das du sicher zurückbekommst)'], ['debts', 'abzüglich fällige Schulden'],
+];
+function calcZakat(c) {
+  const n = (k) => parseAmount(c[k]);
+  const wealth = n('cash') + n('gold') + n('other') + n('receivables') - n('debts');
+  const nisab = n('nisab');
+  const due = nisab && wealth < nisab ? 0 : Math.max(0, Math.round(wealth * 0.025 * 100) / 100);
+  return { wealth, nisab, due, below: !!nisab && wealth < nisab };
+}
+
+function openZakatYearDialog(item) {
+  const isEdit = !!item;
+  const c = item?.calc || {};
+  const num2 = (v) => v != null && v !== '' ? String(v).replace('.', ',') : '';
+  openDialog({
+    title: isEdit ? `Zekât ${item.label}` : 'Neues Zekât-Jahr',
+    html: `
+      <div class="row2">
+        <label>Jahr <input name="label" required maxlength="40" value="${esc(item?.label ?? new Date().getFullYear())}" placeholder="z. B. 2026 oder 1447"></label>
+        <label>Zu geben bis <input type="date" name="due_date" value="${esc(item?.due_date ?? '')}"></label>
+      </div>
+      <label>Zekât für dieses Jahr (€) <input name="due" inputmode="decimal" value="${num2(item?.due || '')}" placeholder="Betrag oder Rechner nutzen"></label>
+      <details class="calc-box" ${!isEdit ? 'open' : ''}>
+        <summary>🧮 Zekât-Rechner (2,5 %)</summary>
+        <div class="stack">
+          ${CALC_FIELDS.map(([k, l]) => `<label>${l} <input name="calc_${k}" inputmode="decimal" value="${num2(c[k])}" placeholder="0"></label>`).join('')}
+          <label>Nisab-Grenze (€) <input name="calc_nisab" inputmode="decimal" value="${num2(c.nisab)}" placeholder="optional, aktueller Wert von ca. 85 g Gold"></label>
+          <div class="calc-result" id="calcResult"></div>
+          <button type="button" class="btn small" id="calcApply">Betrag übernehmen</button>
+          <div class="hint">Der Rechner ist eine Hilfe. Im Zweifel bei der Gemeinde oder beim Imam nachfragen.</div>
+        </div>
+      </details>
+      <label>Notiz <input name="note" maxlength="300" value="${esc(item?.note ?? '')}"></label>
+      ${isEdit ? `<div class="subhead">Zahlungen & Belege</div>
+        ${item.payments.length ? `<ul class="history">${item.payments.map((p) => `<li>
+          <span>${fmtDate(p.date)} · <b>${ZAKAT_KIND[p.kind]}</b>${p.recipient ? ' an ' + esc(p.recipient) : ''}${p.note ? ' · ' + esc(p.note) : ''}<br>
+            ${p.hasFile ? `<a href="/api/zakat/payments/${p.id}/file" target="_blank" rel="noopener">📎 ${esc(p.file_name || 'Beleg')}</a>`
+              : `<button type="button" class="link-btn" data-zupload="${p.id}">📎 Beleg hinzufügen</button>`}</span>
+          <span class="num">${fmt(p.amount)} <button type="button" class="x-btn" data-zdel="${p.id}" aria-label="Zahlung löschen">×</button></span>
+        </li>`).join('')}</ul>` : '<p class="muted small" style="margin:0">Noch keine Zahlungen.</p>'}
+        <input type="file" id="zFile" accept="image/*,application/pdf" hidden>` : ''}`,
+    onOpen: (body) => {
+      const calcInputs = () => Object.fromEntries(['cash', 'gold', 'other', 'receivables', 'debts', 'nisab']
+        .map((k) => [k, $(`[name=calc_${k}]`, body).value]));
+      const show = () => {
+        const r = calcZakat(calcInputs());
+        $('#calcResult', body).innerHTML = r.wealth
+          ? `Zekât-pflichtiges Vermögen: <b>${fmt(r.wealth)}</b><br>${r.below
+            ? `Unter der Nisab-Grenze (${fmt(r.nisab)}) – keine Zekât-Pflicht.`
+            : `2,5 % davon = <b>${fmt(r.due)}</b>`}` : 'Werte eintragen, das Ergebnis erscheint hier.';
+        return r;
+      };
+      body.addEventListener('input', (e) => { if (e.target.name?.startsWith('calc_')) show(); });
+      show();
+      $('#calcApply', body).addEventListener('click', () => {
+        $('[name=due]', body).value = String(show().due).replace('.', ',');
+      });
+      let uploadFor = null;
+      body.addEventListener('click', async (e) => {
+        const del = e.target.closest('[data-zdel]');
+        const up = e.target.closest('[data-zupload]');
+        if (del && confirm('Diese Zahlung löschen? Ein angehängter Beleg wird mit gelöscht.')) {
+          await api('DELETE', `/api/zakat/payments/${del.dataset.zdel}`);
+          del.closest('li').remove(); render();
+        }
+        if (up) { uploadFor = up.dataset.zupload; $('#zFile', body).click(); }
+      });
+      $('#zFile', body)?.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file || !uploadFor) return;
+        try {
+          await uploadBeleg(uploadFor, file);
+          toast('Beleg gespeichert');
+          dlg.close(); await render();
+          const y = zakatCache.years.find((x) => x.id === item.id);
+          if (y) openZakatYearDialog(y);
+        } catch (err) { $('#dlgError').textContent = err.message; }
+      });
+    },
+    onSave: (d) => {
+      const calc = {};
+      for (const k of ['cash', 'gold', 'other', 'receivables', 'debts', 'nisab']) { calc[k] = d['calc_' + k]; delete d['calc_' + k]; }
+      const payload = { ...d, calc };
+      return isEdit ? api('PUT', `/api/zakat/years/${item.id}`, payload) : api('POST', '/api/zakat/years', payload);
+    },
+    onDelete: isEdit && (() => api('DELETE', `/api/zakat/years/${item.id}`)),
+  });
+}
+
+function openZakatPaymentDialog(year) {
+  const recipients = [...new Set((zakatCache?.years || []).flatMap((y) => y.payments.map((p) => p.recipient)).filter(Boolean))];
+  openDialog({
+    title: `Zahlung – Zekât ${year.label}`,
+    html: `
+      ${year.due > 0 ? `<p class="muted small" style="margin:0">Noch offen: <strong>${fmt(Math.max(0, year.remaining))}</strong></p>` : ''}
+      <fieldset>
+        <legend>Art</legend>
+        <label class="radio"><input type="radio" name="kind" value="zekat" checked> Zekât</label>
+        <label class="radio"><input type="radio" name="kind" value="fitre"> Fitre</label>
+        <label class="radio"><input type="radio" name="kind" value="sadaka"> Sadaka (freiwillige Spende)</label>
+      </fieldset>
+      <div class="row2">
+        ${amountInput(year.remaining > 0 ? year.remaining : null)}
+        <label>Datum <input type="date" name="date" required value="${todayIso()}"></label>
+      </div>
+      <label>An wen? <input name="recipient" list="recipList" maxlength="120" placeholder="z. B. Moschee, Verwandte, Hilfsorganisation"></label>
+      <datalist id="recipList">${recipients.map((r) => `<option value="${esc(r)}">`).join('')}</datalist>
+      <label>Notiz <input name="note" maxlength="200" placeholder="optional, z. B. bar übergeben, Überweisung"></label>
+      <label>Beleg / Quittung (Foto oder PDF, optional) <input type="file" name="file" accept="image/*,application/pdf"></label>
+      <label class="check"><input type="checkbox" name="book" checked> Als Ausgabe in diesem Monat buchen (Spenden & Zekât)</label>
+      <div class="hint" id="zAfter"></div>`,
+    onOpen: (body) => {
+      const update = () => {
+        const kind = $('[name=kind]:checked', body).value;
+        const amt = parseAmount($('[name=amount]', body).value);
+        $('#zAfter', body).innerHTML = kind === 'zekat' && year.due > 0 && amt
+          ? `Danach noch offen: <strong>${fmt(Math.max(0, year.remaining - amt))}</strong>`
+          : kind !== 'zekat' ? 'Fitre und Sadaka werden dokumentiert, zählen aber nicht gegen die Zekât-Summe.' : '';
+      };
+      body.addEventListener('input', update); body.addEventListener('change', update); update();
+    },
+    onSave: async (d) => {
+      const file = d.file && d.file.size ? d.file : null;
+      delete d.file;
+      const { id } = await api('POST', `/api/zakat/years/${year.id}/payments`, d);
+      if (file) {
+        try { await uploadBeleg(id, file); }
+        catch (err) { toast('Zahlung gespeichert, aber Beleg nicht: ' + err.message); }
+      }
+    },
+  });
+}
+
+// Fotos vor dem Hochladen verkleinern (spart Platz), PDFs unverändert
+async function shrinkImage(file) {
+  if (!file.type.startsWith('image/') || file.type === 'image/heic' || file.size < 1_000_000) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bmp.width * scale); canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
+    return blob ? new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file;
+  } catch { return file; }
+}
+async function uploadBeleg(paymentId, original) {
+  const file = await shrinkImage(original);
+  if (file.size > 8 * 1024 * 1024) throw new Error('Datei zu groß (max. 8 MB).');
+  const res = await fetch(`/api/zakat/payments/${paymentId}/file`, {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
+    body: file,
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Upload fehlgeschlagen');
+}
+
+// Druckbarer Nachweis über alle Jahre (im Browser „Als PDF speichern“)
+function openZakatReport(z) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Bitte Pop-ups für diese Seite erlauben.'); return; }
+  const rows = z.years.map((y) => `
+    <h2>Zekât ${esc(y.label)}</h2>
+    <p>Zu geben: <b>${fmt(y.due)}</b> · Gegeben: <b>${fmt(y.paid)}</b> · Offen: <b>${fmt(Math.max(0, y.remaining))}</b>
+      ${y.fitre ? ` · Fitre: ${fmt(y.fitre)}` : ''}${y.sadaka ? ` · Sadaka: ${fmt(y.sadaka)}` : ''}</p>
+    ${y.calc ? `<p class="small">Berechnung: ${CALC_FIELDS.filter(([k]) => y.calc[k]).map(([k, l]) => `${l} ${fmt(y.calc[k])}`).join(' · ')}${y.calc.nisab ? ` · Nisab ${fmt(y.calc.nisab)}` : ''}</p>` : ''}
+    ${y.payments.length ? `<table><thead><tr><th>Datum</th><th>Art</th><th>Empfänger</th><th>Notiz</th><th>Beleg</th><th class="r">Betrag</th></tr></thead><tbody>
+      ${y.payments.slice().reverse().map((p) => `<tr><td>${fmtDate(p.date)}</td><td>${ZAKAT_KIND[p.kind]}</td><td>${esc(p.recipient)}</td>
+        <td>${esc(p.note)}</td><td>${p.hasFile ? esc(p.file_name || 'ja') : '–'}</td><td class="r">${fmt(p.amount)}</td></tr>`).join('')}
+    </tbody></table>` : '<p class="small">Keine Zahlungen erfasst.</p>'}`).join('');
+  w.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Zekât-Nachweis ${esc(state.me.user.name)}</title>
+    <style>body{font-family:system-ui,sans-serif;color:#111;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.4}
+    h1{margin:0 0 .2rem}h2{margin:1.6rem 0 .3rem;border-bottom:2px solid #1f6f5c;padding-bottom:.2rem}
+    table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{text-align:left;padding:.35rem .3rem;border-bottom:1px solid #ddd}
+    th{font-size:.8rem;color:#555}.r{text-align:right;white-space:nowrap}.small{font-size:.85rem;color:#444}
+    .tot{background:#eef6f3;padding:.8rem 1rem;border-radius:8px;margin-top:1rem}@media print{button{display:none}}</style></head><body>
+    <button onclick="print()" style="float:right;padding:.5rem 1rem">Drucken / als PDF speichern</button>
+    <h1>Zekât-Nachweis</h1>
+    <div class="small">${esc(state.me.user.name)} · erstellt am ${new Date().toLocaleDateString('de-DE')}</div>
+    <div class="tot">Zekât gegeben (alle Jahre): <b>${fmt(z.totals.paid)}</b> von ${fmt(z.totals.due)}
+      · noch offen: <b>${fmt(z.totals.open)}</b>${z.totals.fitre ? ` · Fitre: ${fmt(z.totals.fitre)}` : ''}${z.totals.sadaka ? ` · Sadaka: ${fmt(z.totals.sadaka)}` : ''}</div>
+    ${rows}</body></html>`);
+  w.document.close();
 }
 
 boot();

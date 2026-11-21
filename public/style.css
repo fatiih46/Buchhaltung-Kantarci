@@ -268,3 +268,18 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .bar i.over { background: var(--danger); }
 .row2 > label, .row3 > label { min-width: 0; }
 input[type=date] { min-width: 0; -webkit-appearance: none; appearance: none; }
+
+/* Zekât */
+.seg4 { grid-template-columns: 1fr 1fr; margin: 0; gap: 4px; }
+@media (min-width: 560px) { .seg4 { grid-template-columns: repeat(4, 1fr); } }
+.date-badge.year b { font-size: .95rem; }
+.doc-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; margin: -.2rem 0 .6rem; }
+.calc-box { border: 1px solid var(--line); border-radius: 10px; padding: .55rem .8rem; }
+.calc-box summary { cursor: pointer; font-weight: 600; }
+.calc-box[open] summary { margin-bottom: .7rem; }
+.calc-result { background: var(--primary-soft); border-radius: 10px; padding: .6rem .8rem; font-size: .9rem; }
+.link-btn { font: inherit; font-size: .85rem; border: 0; background: none; color: var(--primary); padding: 0; cursor: pointer; text-decoration: underline; }
+.history a { color: var(--primary); font-size: .85rem; }
+.dlg-actions { flex-wrap: wrap; }
+.dlg-actions .btn { padding-left: .8rem; padding-right: .8rem; }
+@media (max-width: 420px) { .dlg-actions .btn.primary { flex: 1; } }

@@ -24,6 +24,9 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
     Teil-Rückzahlungen und „noch mehr verliehen“.
   - **Geburtstage & Geschenke** – sortiert nach dem nächsten Geburtstag, mit Alter, Geschenkidee, Budget,
     Preis und Status (Idee → gekauft → verschenkt), frühere Geschenke bleiben als Verlauf erhalten.
+  - **Zekât** – pro Jahr: wie viel zu geben ist (mit Rechner: 2,5 % vom Vermögen, Nisab-Grenze), was schon gegeben
+    wurde und was noch offen ist. Jede Zahlung mit Datum, Empfänger, Notiz und optionalem **Beleg** (Foto oder PDF).
+    Fitre und Sadaka werden mit dokumentiert. Archiv über alle Jahre und **Nachweis zum Drucken / als PDF**.
   - Zahlungen und gekaufte Geschenke lassen sich per Häkchen direkt als Ausgabe/Einnahme im Monat buchen.
 - **Übersicht** – Einkommen − Fixkosten − Mehrverbrauch + Wenigerverbrauch = **„Für mich verfügbar“**, mit Aufteilung nach Kategorie.
 - **Haushaltsübersicht** – was jede Person und ihr gemeinsam noch übrig habt (die Details der anderen Person bleiben privat, nur Summen sind sichtbar).
@@ -37,8 +40,8 @@ Voraussetzung: **Node.js 22.13 oder neuer** (keine weiteren Pakete nötig).
 npm start
 ```
 
-Dann im Browser <http://localhost:3000> öffnen. Die Daten liegen in `data/haushalt.db` (SQLite) –
-diese Datei regelmäßig sichern.
+Dann im Browser <http://localhost:3000> öffnen. Die Daten liegen in `data/haushalt.db` (SQLite), hochgeladene
+Belege in `data/belege/` – den ganzen Ordner `data/` regelmäßig sichern.
 
 Einstellungen über Umgebungsvariablen:
 

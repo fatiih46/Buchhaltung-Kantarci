@@ -11,6 +11,9 @@ const { DatabaseSync } = require('node:sqlite');
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const FILES_DIR = path.join(DATA_DIR, 'belege');
+const MAX_UPLOAD = 8 * 1024 * 1024;
+const UPLOAD_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/heic': '.heic', 'application/pdf': '.pdf' };
 const SECURE_COOKIE = process.env.SECURE_COOKIE === '1';
 const SESSION_DAYS = 60;
 
@@ -97,6 +100,29 @@ CREATE TABLE IF NOT EXISTS birthdays (
   year INTEGER,
   note TEXT NOT NULL DEFAULT ''
 );
+-- Zekât: ein Eintrag pro Jahr mit Soll, dazu Zahlungen (auch Fitre/Sadaka) mit optionalem Beleg
+CREATE TABLE IF NOT EXISTS zakat_years (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  due REAL NOT NULL DEFAULT 0,
+  due_date TEXT,
+  calc TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS zakat_payments (
+  id INTEGER PRIMARY KEY,
+  year_id INTEGER NOT NULL REFERENCES zakat_years(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'zekat' CHECK (kind IN ('zekat','fitre','sadaka')),
+  recipient TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  entry_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+  file_name TEXT,
+  file_type TEXT,
+  file_path TEXT
+);
 CREATE TABLE IF NOT EXISTS gifts (
   id INTEGER PRIMARY KEY,
   birthday_id INTEGER NOT NULL REFERENCES birthdays(id) ON DELETE CASCADE,
@@ -121,7 +147,7 @@ const CATEGORIES = [
   'Auto & Verschleiß', 'Versicherungen', 'Urlaub', 'Handy, Internet & Abos',
   'Kleidung & Shopping', 'Drogerie & Haushalt', 'Essen gehen & Lieferdienste',
   'Kinder', 'Gesundheit', 'Freizeit', 'Geschenke', 'Schulden & Raten', 'Geliehenes / Rückzahlungen',
-  'Sparen & Rücklagen', 'Sonstiges',
+  'Spenden & Zekât', 'Sparen & Rücklagen', 'Sonstiges',
 ];
 const INTERVALS = [1, 3, 6, 12];
 
@@ -151,8 +177,16 @@ function str(v, field, max = 120) {
   if (typeof v !== 'string' || !v.trim()) throw new HttpError(400, `${field} fehlt.`);
   return v.trim().slice(0, max);
 }
+// Deutsche Schreibweise verstehen: "1.400,50" -> 1400.5, "38.500" -> 38500, "12,5" -> 12.5, "12.5" -> 12.5
+function parseAmount(v) {
+  const t = v.trim().replace(/\s|€/g, '');
+  if (!t) return NaN;
+  if (t.includes(',')) return Number(t.replace(/\./g, '').replace(',', '.'));
+  if (/^\d{1,3}(\.\d{3})+$/.test(t)) return Number(t.replace(/\./g, ''));
+  return Number(t);
+}
 function num(v, field, { min = 0, max = 10_000_000 } = {}) {
-  const n = typeof v === 'string' ? Number(v.replace(',', '.')) : Number(v);
+  const n = typeof v === 'string' ? parseAmount(v) : Number(v);
   if (!Number.isFinite(n) || n < min || n > max) throw new HttpError(400, `${field} ist ungültig.`);
   return round2(n);
 }
@@ -186,6 +220,19 @@ function sessionCookie(token, maxAgeSec) {
   return `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAgeSec}${SECURE_COOKIE ? '; Secure' : ''}`;
 }
 
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(new HttpError(413, 'Datei zu groß (max. 8 MB).')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -211,13 +258,13 @@ function sendJson(res, status, data, headers = {}) {
 
 // Einfacher Schutz gegen Passwort-Raten
 const loginAttempts = new Map();
-function rateLimit(key) {
+function rateLimit(key, max = 10) {
   const now = Date.now();
   const rec = loginAttempts.get(key) || { count: 0, since: now };
   if (now - rec.since > 15 * 60_000) { rec.count = 0; rec.since = now; }
   rec.count++;
   loginAttempts.set(key, rec);
-  if (rec.count > 10) throw new HttpError(429, 'Zu viele Versuche. Bitte in 15 Minuten erneut versuchen.');
+  if (rec.count > max) throw new HttpError(429, 'Zu viele Versuche. Bitte in 15 Minuten erneut versuchen.');
 }
 
 // ---------- Auth ----------
@@ -326,6 +373,7 @@ function summaryFor(userId, month) {
     available, categories,
     debtsOpen: round2(debts.filter((d) => d.direction === 'schuld').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
     receivablesOpen: round2(debts.filter((d) => d.direction === 'forderung').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
+    zakatOpen: zakatFor(userId).totals.open,
     upcomingBirthdays: birthdaysFor(userId).filter((b) => b.daysUntil <= 30).slice(0, 5)
       .map((b) => ({ name: b.name, nextDate: b.nextDate, daysUntil: b.daysUntil, turns: b.turns, gift: b.gift })),
   };
@@ -437,16 +485,16 @@ function statsFor(userId, month) {
 
 // ---------- Routen ----------
 const routes = [];
-const route = (method, pattern, handler, { auth = true } = {}) => {
+const route = (method, pattern, handler, { auth = true, raw = false } = {}) => {
   const keys = [];
   const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '(\\d+)'; }) + '$');
-  routes.push({ method, re, keys, handler, auth });
+  routes.push({ method, re, keys, handler, auth, raw });
 };
 
 route('GET', '/api/meta', () => ({ categories: CATEGORIES, intervals: INTERVALS }), { auth: false });
 
 route('POST', '/api/register', ({ body, res, req }) => {
-  rateLimit('reg:' + req.socket.remoteAddress);
+  rateLimit('reg:' + req.socket.remoteAddress, 30);
   const name = str(body.name, 'Name', 60);
   const email = str(body.email, 'E-Mail', 120).toLowerCase();
   const password = typeof body.password === 'string' ? body.password : '';
@@ -759,10 +807,149 @@ route('GET', '/api/export.csv', ({ user, res }) => {
     if (!b.gifts.length) rows.push(['Geburtstag', b.name, date, '', '', '', '', '']);
     for (const g of b.gifts) rows.push(['Geburtstag', b.name, date, g.year, g.idea, g.budget, g.price, g.status]);
   }
-  const csv = '﻿' + rows.map((r) => r.map(esc).join(';')).join('\r\n');
+  rows.push([], ['Zekât-Jahr', 'Art', 'Datum', 'Betrag', 'Empfänger', 'Notiz', 'Soll im Jahr', 'Beleg']);
+  for (const y of zakatFor(user.id).years) {
+    if (!y.payments.length) rows.push([y.label, '', '', '', '', '', y.due, '']);
+    for (const p of y.payments) rows.push([y.label, ZAKAT_KINDS[p.kind], p.date, p.amount, p.recipient, p.note, y.due, p.hasFile ? 'ja' : '']);
+  }
+  const csv = '\uFEFF' + rows.map((r) => r.map(esc).join(';')).join('\r\n');
   res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="haushaltsbuch.csv"' });
   res.end(csv);
   return undefined;
+});
+
+// ---------- Zekât ----------
+function zakatFor(userId) {
+  const years = db.prepare('SELECT * FROM zakat_years WHERE user_id = ? ORDER BY label DESC, id DESC').all(userId);
+  const payStmt = db.prepare('SELECT * FROM zakat_payments WHERE year_id = ? ORDER BY date DESC, id DESC');
+  const list = years.map((y) => {
+    const payments = payStmt.all(y.id).map((p) => {
+      const { file_path: filePath, ...rest } = p;
+      return { ...rest, hasFile: !!filePath };
+    });
+    const sum = (k) => round2(payments.filter((p) => p.kind === k).reduce((s, p) => s + p.amount, 0));
+    const paid = sum('zekat');
+    let calc = null;
+    try { calc = y.calc ? JSON.parse(y.calc) : null; } catch { calc = null; }
+    return { ...y, calc, payments, paid, fitre: sum('fitre'), sadaka: sum('sadaka'),
+      remaining: round2(y.due - paid), done: y.due > 0 && paid >= y.due };
+  });
+  const total = (k) => round2(list.reduce((s, y) => s + y[k], 0));
+  return { years: list, totals: { due: total('due'), paid: total('paid'), fitre: total('fitre'), sadaka: total('sadaka'),
+    open: round2(list.reduce((s, y) => s + Math.max(0, y.remaining), 0)) } };
+}
+function ownZakatYear(userId, id) {
+  const y = db.prepare('SELECT * FROM zakat_years WHERE id = ? AND user_id = ?').get(id, userId);
+  if (!y) throw new HttpError(404, 'Nicht gefunden.');
+  return y;
+}
+function ownZakatPayment(userId, id) {
+  const p = db.prepare(`SELECT p.*, y.label FROM zakat_payments p JOIN zakat_years y ON y.id = p.year_id
+    WHERE p.id = ? AND y.user_id = ?`).get(id, userId);
+  if (!p) throw new HttpError(404, 'Nicht gefunden.');
+  return p;
+}
+function removeFile(rel) {
+  if (!rel) return;
+  fs.rm(path.join(FILES_DIR, path.basename(rel)), { force: true }, () => {});
+}
+function zakatYearFields(body) {
+  const calcNums = {};
+  if (body.calc && typeof body.calc === 'object') {
+    for (const k of ['cash', 'gold', 'other', 'receivables', 'debts', 'nisab']) {
+      const v = body.calc[k];
+      if (v !== '' && v != null) calcNums[k] = num(v, 'Rechner-Feld', { min: 0 });
+    }
+  }
+  return [
+    str(body.label, 'Jahr', 40),
+    body.due === '' || body.due == null ? 0 : num(body.due, 'Betrag'),
+    optDate(body.due_date),
+    Object.keys(calcNums).length ? JSON.stringify(calcNums) : '',
+    typeof body.note === 'string' ? body.note.trim().slice(0, 300) : '',
+  ];
+}
+route('GET', '/api/zakat', ({ user }) => zakatFor(user.id));
+route('POST', '/api/zakat/years', ({ user, body }) => {
+  const id = Number(db.prepare('INSERT INTO zakat_years (label, due, due_date, calc, note, user_id) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(...zakatYearFields(body), user.id).lastInsertRowid);
+  return { ok: true, id };
+});
+route('PUT', '/api/zakat/years/:id', ({ user, body, params }) => {
+  ownZakatYear(user.id, params.id);
+  db.prepare('UPDATE zakat_years SET label = ?, due = ?, due_date = ?, calc = ?, note = ? WHERE id = ? AND user_id = ?')
+    .run(...zakatYearFields(body), params.id, user.id);
+  return { ok: true };
+});
+route('DELETE', '/api/zakat/years/:id', ({ user, params }) => {
+  ownZakatYear(user.id, params.id);
+  for (const p of db.prepare('SELECT file_path FROM zakat_payments WHERE year_id = ?').all(params.id)) removeFile(p.file_path);
+  db.prepare('DELETE FROM zakat_years WHERE id = ? AND user_id = ?').run(params.id, user.id);
+  return { ok: true };
+});
+const ZAKAT_KINDS = { zekat: 'Zekât', fitre: 'Fitre', sadaka: 'Sadaka' };
+route('POST', '/api/zakat/years/:id/payments', ({ user, body, params }) => {
+  const y = ownZakatYear(user.id, params.id);
+  const kind = ZAKAT_KINDS[body.kind] ? body.kind : 'zekat';
+  const date = dateStr(body.date);
+  const amount = num(body.amount, 'Betrag', { min: 0.01 });
+  const recipient = typeof body.recipient === 'string' ? body.recipient.trim().slice(0, 120) : '';
+  const note = typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '';
+  const entryId = isChecked(body.book) ? bookEntry(user.id, {
+    date, amount, kind: 'mehr', category: 'Spenden & Zekât', shop: recipient,
+    note: `${ZAKAT_KINDS[kind]} ${y.label}${note ? ' – ' + note : ''}`,
+  }) : null;
+  const id = Number(db.prepare(`INSERT INTO zakat_payments (year_id, date, amount, kind, recipient, note, entry_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(y.id, date, amount, kind, recipient, note, entryId).lastInsertRowid);
+  return { ok: true, id };
+});
+route('DELETE', '/api/zakat/payments/:id', ({ user, params }) => {
+  const p = ownZakatPayment(user.id, params.id);
+  removeFile(p.file_path);
+  db.prepare('DELETE FROM zakat_payments WHERE id = ?').run(p.id);
+  if (p.entry_id) db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(p.entry_id, user.id);
+  return { ok: true };
+});
+// Beleg (Foto oder PDF) zu einer Zahlung hochladen / anzeigen / entfernen
+route('POST', '/api/zakat/payments/:id/file', ({ user, params, body, req }) => {
+  const p = ownZakatPayment(user.id, params.id);
+  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (!UPLOAD_TYPES[type]) throw new HttpError(415, 'Nur Fotos (JPG, PNG, WEBP, HEIC) oder PDF erlaubt.');
+  if (!body.length) throw new HttpError(400, 'Datei ist leer.');
+  // Inhalt prüfen, nicht nur den angegebenen Typ
+  const isPdf = body.subarray(0, 5).toString('latin1') === '%PDF-';
+  const isImg = (body[0] === 0xff && body[1] === 0xd8) || (body[0] === 0x89 && body[1] === 0x50)
+    || body.subarray(0, 4).toString('latin1') === 'RIFF' || body.subarray(4, 8).toString('latin1') === 'ftyp';
+  if ((type === 'application/pdf' && !isPdf) || (type !== 'application/pdf' && !isImg))
+    throw new HttpError(415, 'Dateiinhalt passt nicht zum Dateityp.');
+  fs.mkdirSync(FILES_DIR, { recursive: true });
+  const fileName = crypto.randomBytes(16).toString('hex') + UPLOAD_TYPES[type];
+  fs.writeFileSync(path.join(FILES_DIR, fileName), body);
+  removeFile(p.file_path);
+  let original = 'beleg';
+  try { original = decodeURIComponent(String(req.headers['x-file-name'] || 'beleg')); } catch { /* Standardname */ }
+  original = original.replace(/[^\w.\- äöüÄÖÜß()]/g, '_').slice(0, 100) || 'beleg';
+  db.prepare('UPDATE zakat_payments SET file_name = ?, file_type = ?, file_path = ? WHERE id = ?').run(original, type, fileName, p.id);
+  return { ok: true };
+}, { raw: true });
+route('GET', '/api/zakat/payments/:id/file', ({ user, params, res }) => {
+  const p = ownZakatPayment(user.id, params.id);
+  if (!p.file_path) throw new HttpError(404, 'Kein Beleg vorhanden.');
+  const full = path.join(FILES_DIR, path.basename(p.file_path));
+  if (!fs.existsSync(full)) throw new HttpError(404, 'Datei nicht gefunden.');
+  res.writeHead(200, {
+    'Content-Type': p.file_type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store',
+    'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; object-src 'self'",
+    'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(p.file_name || 'beleg')}`,
+  });
+  fs.createReadStream(full).pipe(res);
+  return undefined;
+});
+route('DELETE', '/api/zakat/payments/:id/file', ({ user, params }) => {
+  const p = ownZakatPayment(user.id, params.id);
+  removeFile(p.file_path);
+  db.prepare('UPDATE zakat_payments SET file_name = NULL, file_type = NULL, file_path = NULL WHERE id = ?').run(p.id);
+  return { ok: true };
 });
 
 // ---------- Statische Dateien ----------
@@ -789,9 +976,9 @@ const server = http.createServer(async (req, res) => {
     const params = Object.fromEntries(r.keys.map((k, i) => [k, Number(m[i + 1])]));
     const user = currentUser(req);
     if (r.auth && !user) throw new HttpError(401, 'Bitte anmelden.');
-    if (req.method !== 'GET' && req.headers['content-type'] && !req.headers['content-type'].includes('application/json'))
+    if (!r.raw && req.method !== 'GET' && req.headers['content-type'] && !req.headers['content-type'].includes('application/json'))
       throw new HttpError(415, 'Nur JSON erlaubt.');
-    const body = req.method === 'GET' ? {} : await readBody(req);
+    const body = req.method === 'GET' ? {} : r.raw ? await readRaw(req, MAX_UPLOAD) : await readBody(req);
     const result = await r.handler({ req, res, user, body, params, query: url.searchParams });
     if (result !== undefined) sendJson(res, 200, result);
   } catch (err) {
