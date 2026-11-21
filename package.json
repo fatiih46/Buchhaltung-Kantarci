@@ -1,13 +1,14 @@
 {
   "name": "haushaltsbuch-kantarci",
   "version": "1.0.0",
-  "description": "Haushaltsbuch für zwei: Fixkosten, Mehrverbrauch und was am Ende übrig bleibt.",
+  "description": "Haushaltsbuch für zwei: Fixkosten, Mehrverbrauch und was am Ende übrig bleibt. Läuft kostenlos mit Supabase oder auf einem eigenen Server.",
   "private": true,
   "main": "server.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
-    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js"
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
+    "test:cloud": "cd test/cloud && npm install && npm test"
   },
   "engines": {
     "node": ">=22.13"

@@ -5,16 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Haushaltsbuch</title>
   <meta name="theme-color" content="#1f6f5c">
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <p id="loading" class="loading">Lädt …</p>
   <!-- Anmeldung / Registrierung -->
   <main id="auth" class="auth" hidden>
     <div class="auth-card">
-      <img src="/icon.svg" alt="" width="56" height="56">
+      <img src="icon.svg" alt="" width="56" height="56">
       <h1>Haushaltsbuch</h1>
       <p class="muted">Fixkosten, Mehrverbrauch und was am Ende für dich übrig bleibt.</p>
 
@@ -27,6 +28,7 @@
         <label>E-Mail <input name="email" type="email" autocomplete="email" required></label>
         <label>Passwort <input name="password" type="password" autocomplete="current-password" required></label>
         <button class="btn primary" type="submit">Anmelden</button>
+        <button type="button" class="btn ghost small" id="forgotPw" hidden>Passwort vergessen?</button>
       </form>
 
       <form id="registerForm" class="stack" hidden>
@@ -205,12 +207,12 @@
         <div class="card">
           <h2>Mein Konto</h2>
           <p id="accountInfo" class="muted"></p>
-          <a class="btn" href="/api/export.csv">Daten als CSV exportieren</a>
+          <a class="btn" id="exportCsv" href="/api/export.csv">Daten als CSV exportieren</a>
         </div>
         <div class="card">
           <h2>Passwort ändern</h2>
           <form id="pwForm" class="stack">
-            <label>Altes Passwort <input name="oldPassword" type="password" autocomplete="current-password" required></label>
+            <label id="oldPwLabel">Altes Passwort <input name="oldPassword" type="password" autocomplete="current-password" required></label>
             <label>Neues Passwort <input name="newPassword" type="password" autocomplete="new-password" minlength="8" required></label>
             <button class="btn primary" type="submit">Speichern</button>
           </form>
@@ -245,6 +247,9 @@
 
   <datalist id="shopList"></datalist>
   <div id="toast" class="toast" hidden></div>
-  <script src="/app.js"></script>
+  <script src="config.js"></script>
+  <script src="core.js"></script>
+  <script src="cloud.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

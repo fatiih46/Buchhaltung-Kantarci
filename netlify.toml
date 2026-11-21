@@ -1,0 +1,12 @@
+# Kostenloses Hosting der App bei Netlify (siehe docs/CLOUD.md).
+# Es wird nichts gebaut – der Ordner public/ wird direkt als Webseite ausgeliefert.
+[build]
+  publish = "public"
+  command = ""
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+    X-Frame-Options = "DENY"
