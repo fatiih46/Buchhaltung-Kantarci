@@ -44,7 +44,14 @@
     })().catch((err) => { ready = null; throw err; });
     return ready;
   }
-  const offline = () => new HttpError(503, 'Keine Verbindung zur Datenbank – bitte Internetverbindung prüfen.');
+  // Fehler der Datenbank verständlich machen: echte Verbindungsprobleme vs. fehlende Einrichtung
+  const offline = (error) => {
+    const code = error && error.code;
+    if (code === '42501' || code === '42P01' || code === 'PGRST202' || code === 'PGRST205')
+      return new HttpError(500, 'Die Datenbank ist noch nicht vollständig eingerichtet. Bitte supabase/setup.sql im Supabase SQL Editor (erneut) ausführen.');
+    if (code) return new HttpError(500, `Datenbankfehler: ${error.message || code}`);
+    return new HttpError(503, 'Keine Verbindung zur Datenbank – bitte Internetverbindung prüfen.');
+  };
   const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
   function toB64(u8) {
     let s = '';
@@ -136,7 +143,7 @@
     if (member) return;
     const read = () => sb.from('members').select('name, household_id').eq('user_id', auth.uid).maybeSingle();
     let { data, error } = await read();
-    if (error) throw offline();
+    if (error) throw offline(error);
     if (!data) {
       const name = String(auth.meta.name || auth.email.split('@')[0]).slice(0, 60);
       const res = auth.meta.invite_code
@@ -144,7 +151,7 @@
         : await sb.rpc('create_household', { p_household_name: auth.meta.household_name || '', p_name: name });
       if (res.error) throw new HttpError(400, res.error.message);
       ({ data, error } = await read());
-      if (error || !data) throw offline();
+      if (error || !data) throw offline(error);
     }
     member = data;
   }
@@ -152,7 +159,7 @@
   // ---------- Daten laden & speichern ----------
   async function loadData() {
     const { data, error } = await sb.from('user_data').select('data, version').eq('user_id', auth.uid).maybeSingle();
-    if (error) throw offline();
+    if (error) throw offline(error);
     if (data) {
       openDb(fromB64(data.data));
       version = data.version; savedB64 = data.data;
@@ -163,7 +170,7 @@
     const ins = await sb.from('user_data').insert({ user_id: auth.uid, data: b64, version: 1 });
     if (ins.error) {
       if (ins.error.code === '23505') return loadData(); // gleichzeitig auf einem anderen Gerät angelegt
-      throw offline();
+      throw offline(ins.error);
     }
     version = 1; savedB64 = b64;
     scheduleSummaries(0);
@@ -237,7 +244,7 @@
     const code = typeof body.inviteCode === 'string' ? body.inviteCode.trim().toUpperCase() : '';
     if (code) {
       const { data, error } = await sb.rpc('check_invite', { p_code: code });
-      if (error) throw offline();
+      if (error) throw offline(error);
       if (!data) throw new HttpError(400, 'Einladungscode nicht gefunden.');
     }
     const householdName = typeof body.householdName === 'string' ? body.householdName.trim().slice(0, 60) : '';
@@ -273,7 +280,7 @@
       sb.from('households').select('name, invite_code').eq('id', member.household_id).single(),
       sb.from('members').select('user_id, name').order('created_at'),
     ]);
-    if (hh.error || members.error) throw offline();
+    if (hh.error || members.error) throw offline(hh.error || members.error);
     return {
       user: { id: auth.uid, name: member.name, email: auth.email },
       household: { name: hh.data.name, inviteCode: hh.data.invite_code },
@@ -287,7 +294,7 @@
       sb.from('members').select('user_id, name').order('created_at'),
       sb.from('summaries').select('user_id, months'),
     ]);
-    if (members.error || sums.error) throw offline();
+    if (members.error || sums.error) throw offline(members.error || sums.error);
     const empty = Object.fromEntries(SUMMARY_FIELDS.map((k) => [k, 0]));
     const list = members.data.map((m) => {
       const isMe = m.user_id === auth.uid;
