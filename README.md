@@ -9,9 +9,17 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
   Jahresbeträge werden automatisch auf den Monat umgerechnet. Bei gemeinsamen Kosten
   (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag und seinen **Anteil in %** an.
 - **Zusätzliche Buchungen** – „Mehr verbraucht“ (z. B. Reparatur) oder „Weniger verbraucht“ / Extra-Einnahme, pro Monat.
+- **Listen** (eigener Reiter):
+  - **Schulden** – was ich noch zurückzahlen muss (Kredite, Ratenkäufe, geliehenes Geld): Gesamtbetrag,
+    monatliche Rate, Fälligkeit, Zahlungen. Offener Betrag und Restlaufzeit werden automatisch berechnet.
+    Die Rate kann optional automatisch bei den Fixkosten mitgezählt werden.
+  - **Forderungen** – was ich zurückbekomme: wer, wie viel, was schon zurückgezahlt wurde.
+  - **Geburtstage & Geschenke** – sortiert nach dem nächsten Geburtstag, mit Alter, Geschenkidee, Budget,
+    Preis und Status (Idee → gekauft → verschenkt), frühere Geschenke bleiben als Verlauf erhalten.
+  - Zahlungen und gekaufte Geschenke lassen sich per Häkchen direkt als Ausgabe/Einnahme im Monat buchen.
 - **Übersicht** – Einkommen − Fixkosten − Mehrverbrauch + Wenigerverbrauch = **„Für mich verfügbar“**, mit Aufteilung nach Kategorie.
 - **Haushaltsübersicht** – was jede Person und ihr gemeinsam noch übrig habt (die Details der anderen Person bleiben privat, nur Summen sind sichtbar).
-- CSV-Export (für Excel), Passwort ändern, Hell-/Dunkelmodus, auf dem Handy als App installierbar („Zum Home-Bildschirm“).
+- CSV-Export (für Excel), Passwort ändern (⚙ oben rechts), Hell-/Dunkelmodus, auf dem Handy als App installierbar („Zum Home-Bildschirm“).
 
 ## Starten
 

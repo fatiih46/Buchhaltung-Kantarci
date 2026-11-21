@@ -63,12 +63,58 @@ CREATE TABLE IF NOT EXISTS entries (
   note TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_entries_user_date ON entries(user_id, date);
+
+-- Schulden (ich schulde) und Forderungen (mir wird geschuldet)
+CREATE TABLE IF NOT EXISTS debts (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  direction TEXT NOT NULL CHECK (direction IN ('schuld','forderung')),
+  person TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  amount REAL NOT NULL,
+  start_date TEXT,
+  due_date TEXT,
+  monthly_rate REAL NOT NULL DEFAULT 0,
+  in_budget INTEGER NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS debt_payments (
+  id INTEGER PRIMARY KEY,
+  debt_id INTEGER NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  entry_id INTEGER REFERENCES entries(id) ON DELETE SET NULL
+);
+
+-- Geburtstage und Geschenke (ein Geschenk pro Person und Jahr)
+CREATE TABLE IF NOT EXISTS birthdays (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  month INTEGER NOT NULL,
+  year INTEGER,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS gifts (
+  id INTEGER PRIMARY KEY,
+  birthday_id INTEGER NOT NULL REFERENCES birthdays(id) ON DELETE CASCADE,
+  year INTEGER NOT NULL,
+  idea TEXT NOT NULL DEFAULT '',
+  budget REAL NOT NULL DEFAULT 0,
+  price REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'offen' CHECK (status IN ('offen','idee','gekauft','verschenkt')),
+  entry_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+  UNIQUE (birthday_id, year)
+);
 `);
 
 const CATEGORIES = [
   'Haus & Wohnen', 'Kredit / Abtrag', 'Nebenkosten & Energie', 'Einkaufen & Lebensmittel',
   'Auto & Verschleiß', 'Versicherungen', 'Urlaub', 'Handy, Internet & Abos',
-  'Kinder', 'Gesundheit', 'Freizeit', 'Sparen & Rücklagen', 'Sonstiges',
+  'Kinder', 'Gesundheit', 'Freizeit', 'Geschenke', 'Schulden & Raten', 'Geliehenes / Rückzahlungen',
+  'Sparen & Rücklagen', 'Sonstiges',
 ];
 const INTERVALS = [1, 3, 6, 12];
 
@@ -182,6 +228,49 @@ function currentUser(req) {
   return row ? { ...row } : null;
 }
 
+// ---------- Schulden, Forderungen, Geburtstage ----------
+function debtsFor(userId) {
+  const debts = db.prepare('SELECT * FROM debts WHERE user_id = ? ORDER BY direction, person').all(userId);
+  const payStmt = db.prepare('SELECT * FROM debt_payments WHERE debt_id = ? ORDER BY date DESC, id DESC');
+  return debts.map((d) => {
+    const payments = payStmt.all(d.id).map((p) => ({ ...p }));
+    const paid = round2(payments.reduce((s, p) => s + p.amount, 0));
+    const remaining = round2(d.amount - paid);
+    const monthsLeft = d.monthly_rate > 0 && remaining > 0 ? Math.ceil(remaining / d.monthly_rate) : null;
+    return { ...d, in_budget: !!d.in_budget, payments, paid, remaining, done: remaining <= 0, monthsLeft };
+  });
+}
+
+function todayParts() {
+  const t = new Date();
+  return { y: t.getFullYear(), m: t.getMonth() + 1, d: t.getDate(), date: new Date(t.getFullYear(), t.getMonth(), t.getDate()) };
+}
+function birthdaysFor(userId) {
+  const today = todayParts();
+  const list = db.prepare('SELECT * FROM birthdays WHERE user_id = ?').all(userId);
+  const giftStmt = db.prepare('SELECT * FROM gifts WHERE birthday_id = ? ORDER BY year DESC');
+  return list.map((b) => {
+    // 29. Februar in Nicht-Schaltjahren -> 28. Februar
+    const dateIn = (y) => {
+      const dim = new Date(y, b.month, 0).getDate();
+      return new Date(y, b.month - 1, Math.min(b.day, dim));
+    };
+    let nextYear = today.y;
+    if (dateIn(nextYear) < today.date) nextYear++;
+    const next = dateIn(nextYear);
+    const daysUntil = Math.round((next - today.date) / 86400_000);
+    const gifts = giftStmt.all(b.id).map((g) => ({ ...g }));
+    const gift = gifts.find((g) => g.year === nextYear) || null;
+    const iso = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+    return { ...b, nextYear, nextDate: iso, daysUntil, turns: b.year ? nextYear - b.year : null, gift, gifts };
+  }).sort((a, b) => a.daysUntil - b.daysUntil || a.name.localeCompare(b.name, 'de'));
+}
+
+function bookEntry(userId, { date, kind, category, amount, note }) {
+  return Number(db.prepare('INSERT INTO entries (user_id, date, kind, category, amount, note) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(userId, date, kind, category, amount, note.slice(0, 200)).lastInsertRowid);
+}
+
 // ---------- Berechnungen ----------
 function summaryFor(userId, month) {
   const incomes = db.prepare('SELECT * FROM incomes WHERE user_id = ?').all(userId);
@@ -196,6 +285,16 @@ function summaryFor(userId, month) {
     fixedTotal += monthly;
     byCategory[f.category] = byCategory[f.category] || { planned: 0, extra: 0 };
     byCategory[f.category].planned += monthly;
+  }
+  // Raten von Schulden, die "bei Fixkosten mitzählen" sollen (solange noch etwas offen ist)
+  const debts = debtsFor(userId);
+  for (const d of debts) {
+    if (d.direction !== 'schuld' || !d.in_budget || d.monthly_rate <= 0 || d.remaining <= 0) continue;
+    if (d.start_date && d.start_date.slice(0, 7) > month) continue;
+    const rate = Math.min(d.monthly_rate, d.remaining);
+    fixedTotal += rate;
+    byCategory['Schulden & Raten'] = byCategory['Schulden & Raten'] || { planned: 0, extra: 0 };
+    byCategory['Schulden & Raten'].planned += rate;
   }
   let extraMore = 0, extraLess = 0;
   for (const e of entries) {
@@ -215,6 +314,10 @@ function summaryFor(userId, month) {
     extraMore: round2(extraMore), extraLess: round2(extraLess),
     plannedAvailable: round2(income - fixedTotal),
     available, categories,
+    debtsOpen: round2(debts.filter((d) => d.direction === 'schuld').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
+    receivablesOpen: round2(debts.filter((d) => d.direction === 'forderung').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
+    upcomingBirthdays: birthdaysFor(userId).filter((b) => b.daysUntil <= 30).slice(0, 5)
+      .map((b) => ({ name: b.name, nextDate: b.nextDate, daysUntil: b.daysUntil, turns: b.turns, gift: b.gift })),
   };
 }
 
@@ -363,6 +466,132 @@ route('GET', '/api/household', ({ user, query }) => {
     extraMore: sum('extraMore'), extraLess: sum('extraLess'), available: sum('available') } };
 });
 
+// Schulden & Forderungen
+function optDate(v) {
+  if (v == null || v === '') return null;
+  return dateStr(v);
+}
+function debtFields(body) {
+  return [
+    body.direction === 'forderung' ? 'forderung' : 'schuld',
+    str(body.person, 'Person / Gläubiger', 120),
+    typeof body.title === 'string' ? body.title.trim().slice(0, 120) : '',
+    num(body.amount, 'Betrag', { min: 0.01 }),
+    optDate(body.start_date),
+    optDate(body.due_date),
+    body.monthly_rate === '' || body.monthly_rate == null ? 0 : num(body.monthly_rate, 'Monatliche Rate'),
+    body.in_budget === true || body.in_budget === 'on' || body.in_budget === '1' ? 1 : 0,
+    typeof body.note === 'string' ? body.note.trim().slice(0, 300) : '',
+  ];
+}
+function ownDebt(userId, id) {
+  const d = db.prepare('SELECT * FROM debts WHERE id = ? AND user_id = ?').get(id, userId);
+  if (!d) throw new HttpError(404, 'Nicht gefunden.');
+  return d;
+}
+route('GET', '/api/debts', ({ user }) => debtsFor(user.id));
+route('POST', '/api/debts', ({ user, body }) => {
+  db.prepare(`INSERT INTO debts (direction, person, title, amount, start_date, due_date, monthly_rate, in_budget, note, user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...debtFields(body), user.id);
+  return { ok: true };
+});
+route('PUT', '/api/debts/:id', ({ user, body, params }) => {
+  ownDebt(user.id, params.id);
+  db.prepare(`UPDATE debts SET direction = ?, person = ?, title = ?, amount = ?, start_date = ?, due_date = ?,
+    monthly_rate = ?, in_budget = ?, note = ? WHERE id = ? AND user_id = ?`).run(...debtFields(body), params.id, user.id);
+  return { ok: true };
+});
+route('DELETE', '/api/debts/:id', ({ user, params }) => {
+  db.prepare('DELETE FROM debts WHERE id = ? AND user_id = ?').run(params.id, user.id);
+  return { ok: true };
+});
+route('POST', '/api/debts/:id/payments', ({ user, body, params }) => {
+  const d = ownDebt(user.id, params.id);
+  const date = dateStr(body.date);
+  const amount = num(body.amount, 'Betrag', { min: 0.01 });
+  const note = typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '';
+  let entryId = null;
+  if (body.book === true || body.book === 'on') {
+    const isDebt = d.direction === 'schuld';
+    entryId = bookEntry(user.id, {
+      date, amount,
+      kind: isDebt ? 'mehr' : 'weniger',
+      category: isDebt ? 'Schulden & Raten' : 'Geliehenes / Rückzahlungen',
+      note: `${isDebt ? 'Rückzahlung an' : 'Rückzahlung von'} ${d.person}${note ? ' – ' + note : ''}`,
+    });
+  }
+  db.prepare('INSERT INTO debt_payments (debt_id, date, amount, note, entry_id) VALUES (?, ?, ?, ?, ?)')
+    .run(d.id, date, amount, note, entryId);
+  return { ok: true };
+});
+route('DELETE', '/api/payments/:id', ({ user, params }) => {
+  const p = db.prepare(`SELECT p.* FROM debt_payments p JOIN debts d ON d.id = p.debt_id
+    WHERE p.id = ? AND d.user_id = ?`).get(params.id, user.id);
+  if (!p) throw new HttpError(404, 'Nicht gefunden.');
+  db.prepare('DELETE FROM debt_payments WHERE id = ?').run(p.id);
+  if (p.entry_id) db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(p.entry_id, user.id);
+  return { ok: true };
+});
+
+// Geburtstage & Geschenke
+function birthdayFields(body) {
+  const day = num(body.day, 'Tag', { min: 1, max: 31 });
+  const month = num(body.month, 'Monat', { min: 1, max: 12 });
+  if (!Number.isInteger(day) || !Number.isInteger(month) || day > new Date(2000, month, 0).getDate())
+    throw new HttpError(400, 'Datum ist ungültig.');
+  const year = body.year === '' || body.year == null ? null : num(body.year, 'Geburtsjahr', { min: 1900, max: 2100 });
+  if (year !== null && !Number.isInteger(year)) throw new HttpError(400, 'Geburtsjahr ist ungültig.');
+  return [str(body.name, 'Name', 120), day, month, year, typeof body.note === 'string' ? body.note.trim().slice(0, 300) : ''];
+}
+route('GET', '/api/birthdays', ({ user }) => birthdaysFor(user.id));
+route('POST', '/api/birthdays', ({ user, body }) => {
+  const id = Number(db.prepare('INSERT INTO birthdays (name, day, month, year, note, user_id) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(...birthdayFields(body), user.id).lastInsertRowid);
+  return { ok: true, id };
+});
+route('PUT', '/api/birthdays/:id', ({ user, body, params }) => {
+  const r = db.prepare('UPDATE birthdays SET name = ?, day = ?, month = ?, year = ?, note = ? WHERE id = ? AND user_id = ?')
+    .run(...birthdayFields(body), params.id, user.id);
+  if (!r.changes) throw new HttpError(404, 'Nicht gefunden.');
+  return { ok: true };
+});
+route('DELETE', '/api/birthdays/:id', ({ user, params }) => {
+  db.prepare('DELETE FROM birthdays WHERE id = ? AND user_id = ?').run(params.id, user.id);
+  return { ok: true };
+});
+route('PUT', '/api/birthdays/:id/gift', ({ user, body, params }) => {
+  const b = db.prepare('SELECT * FROM birthdays WHERE id = ? AND user_id = ?').get(params.id, user.id);
+  if (!b) throw new HttpError(404, 'Nicht gefunden.');
+  const year = num(body.year, 'Jahr', { min: 1900, max: 2100 });
+  const idea = typeof body.idea === 'string' ? body.idea.trim().slice(0, 200) : '';
+  const budget = body.budget === '' || body.budget == null ? 0 : num(body.budget, 'Budget');
+  const price = body.price === '' || body.price == null ? 0 : num(body.price, 'Preis');
+  const status = ['offen', 'idee', 'gekauft', 'verschenkt'].includes(body.status) ? body.status : (idea ? 'idee' : 'offen');
+
+  const existing = db.prepare('SELECT * FROM gifts WHERE birthday_id = ? AND year = ?').get(b.id, year);
+  let entryId = existing ? existing.entry_id : null;
+  const bought = status === 'gekauft' || status === 'verschenkt';
+  if (entryId && price > 0) {
+    // bereits gebuchte Ausgabe an den neuen Preis anpassen
+    db.prepare('UPDATE entries SET amount = ? WHERE id = ? AND user_id = ?').run(price, entryId, user.id);
+  } else if (entryId && price <= 0) {
+    db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(entryId, user.id);
+    entryId = null;
+  } else if (!entryId && bought && price > 0 && (body.book === true || body.book === 'on')) {
+    const t = todayParts();
+    entryId = bookEntry(user.id, {
+      date: `${t.y}-${String(t.m).padStart(2, '0')}-${String(t.d).padStart(2, '0')}`,
+      kind: 'mehr', category: 'Geschenke', amount: price,
+      note: `Geschenk für ${b.name}${idea ? ': ' + idea : ''}`,
+    });
+  }
+  db.prepare(`INSERT INTO gifts (birthday_id, year, idea, budget, price, status, entry_id) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (birthday_id, year) DO UPDATE SET idea = excluded.idea, budget = excluded.budget,
+    price = excluded.price, status = excluded.status, entry_id = excluded.entry_id`)
+    .run(b.id, year, idea, budget, price, status, entryId);
+  return { ok: true };
+});
+
 // CSV-Export der eigenen Buchungen
 route('GET', '/api/export.csv', ({ user, res }) => {
   const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
@@ -373,6 +602,15 @@ route('GET', '/api/export.csv', ({ user, res }) => {
     rows.push(['Fixkosten', f.name, f.category, f.amount, f.interval, f.share, '']);
   for (const e of db.prepare('SELECT * FROM entries WHERE user_id = ? ORDER BY date').all(user.id))
     rows.push([e.kind === 'mehr' ? 'Mehr verbraucht' : 'Weniger verbraucht', e.note, e.category, e.amount, '', '', e.date]);
+  rows.push([], ['Typ', 'Person', 'Bezeichnung', 'Betrag', 'Bezahlt', 'Offen', 'Rate/Monat', 'Fällig']);
+  for (const d of debtsFor(user.id))
+    rows.push([d.direction === 'schuld' ? 'Schuld' : 'Forderung', d.person, d.title, d.amount, d.paid, d.remaining, d.monthly_rate, d.due_date || '']);
+  rows.push([], ['Geburtstag', 'Name', 'Datum', 'Jahr', 'Geschenk', 'Budget', 'Preis', 'Status']);
+  for (const b of birthdaysFor(user.id)) {
+    const date = `${String(b.day).padStart(2, '0')}.${String(b.month).padStart(2, '0')}.${b.year || ''}`;
+    if (!b.gifts.length) rows.push(['Geburtstag', b.name, date, '', '', '', '', '']);
+    for (const g of b.gifts) rows.push(['Geburtstag', b.name, date, g.year, g.idea, g.budget, g.price, g.status]);
+  }
   const csv = '﻿' + rows.map((r) => r.map(esc).join(';')).join('\r\n');
   res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="haushaltsbuch.csv"' });
   res.end(csv);

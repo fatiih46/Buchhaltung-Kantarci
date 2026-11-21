@@ -57,6 +57,7 @@
         <button type="button" class="icon-btn" id="prevMonth" aria-label="Vorheriger Monat">‹</button>
         <span id="monthLabel"></span>
         <button type="button" class="icon-btn" id="nextMonth" aria-label="Nächster Monat">›</button>
+        <button type="button" class="icon-btn gear" data-tab="account" aria-label="Konto">⚙</button>
       </div>
     </header>
 
@@ -83,6 +84,15 @@
         <div class="quick">
           <button type="button" class="btn danger-soft" data-quick="mehr">＋ Mehr verbraucht</button>
           <button type="button" class="btn ok-soft" data-quick="weniger">− Weniger verbraucht</button>
+        </div>
+
+        <div class="card" id="listsTeaser" hidden>
+          <div class="card-head">
+            <h2>Schulden, Forderungen &amp; Geburtstage</h2>
+            <button type="button" class="btn small" data-goto-lists>Öffnen</button>
+          </div>
+          <dl class="calc" id="teaserCalc"></dl>
+          <ul class="list compact" id="teaserBirthdays"></ul>
         </div>
 
         <div class="card">
@@ -127,6 +137,25 @@
         </div>
       </section>
 
+      <!-- Listen: Schulden, Forderungen, Geburtstage -->
+      <section data-view="lists" hidden>
+        <div class="seg seg3" role="tablist">
+          <button type="button" data-list="schuld" class="active">Schulden</button>
+          <button type="button" data-list="forderung">Forderungen</button>
+          <button type="button" data-list="geburtstag">Geburtstage</button>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2 id="listTitle"></h2>
+            <button type="button" class="btn small" id="listAdd">＋ Neu</button>
+          </div>
+          <p class="muted small" id="listHint"></p>
+          <div id="listSummary"></div>
+          <ul class="list" id="listBody"></ul>
+          <p class="muted small empty" id="listEmpty" hidden></p>
+        </div>
+      </section>
+
       <!-- Haushalt -->
       <section data-view="household" hidden>
         <div class="card">
@@ -167,8 +196,8 @@
       <button type="button" data-tab="overview" class="active"><span>◎</span>Übersicht</button>
       <button type="button" data-tab="plan"><span>☰</span>Plan</button>
       <button type="button" data-tab="entries"><span>±</span>Buchungen</button>
+      <button type="button" data-tab="lists"><span>✎</span>Listen</button>
       <button type="button" data-tab="household"><span>⌂</span>Haushalt</button>
-      <button type="button" data-tab="account"><span>⚙</span>Konto</button>
     </nav>
   </div>
 
