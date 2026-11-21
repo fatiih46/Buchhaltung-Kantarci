@@ -270,8 +270,9 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 input[type=date] { min-width: 0; -webkit-appearance: none; appearance: none; }
 
 /* Zekât */
-.seg4 { grid-template-columns: 1fr 1fr; margin: 0; gap: 4px; }
-@media (min-width: 560px) { .seg4 { grid-template-columns: repeat(4, 1fr); } }
+.seg4 { grid-template-columns: repeat(3, 1fr); margin: 0; gap: 4px; }
+.seg4 button { font-size: .9rem; padding: .5rem .2rem; }
+@media (min-width: 560px) { .seg4 { grid-template-columns: repeat(5, 1fr); } }
 .date-badge.year b { font-size: .95rem; }
 .doc-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; margin: -.2rem 0 .6rem; }
 .calc-box { border: 1px solid var(--line); border-radius: 10px; padding: .55rem .8rem; }
@@ -310,3 +311,11 @@ input[type=date] { min-width: 0; -webkit-appearance: none; appearance: none; }
 .history li > span:first-child { flex: 1 1 55%; min-width: 0; }
 .history li > span.num { margin-left: auto; }
 .att-thumb { text-decoration: none; color: inherit; }
+
+/* Vermögen */
+.price-box { background: var(--bg); border-radius: 10px; padding: .7rem .8rem; display: flex; flex-direction: column; gap: .35rem; margin-bottom: .6rem; font-size: .92rem; }
+.price-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .2rem; }
+.list li.group-head { cursor: default; background: none; padding: .9rem .1rem .3rem; border-bottom: 2px solid var(--line);
+  font-size: .82rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.list li.group-head:hover { background: none; }
+.list li.group-head .num { text-transform: none; letter-spacing: 0; }

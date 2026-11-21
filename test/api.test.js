@@ -360,3 +360,54 @@ test('Mehrere Belege an Ausgaben, Schulden und Zahlungen', async () => {
   const after = fs.readdirSync(path.join(process.env.DATA_DIR, 'belege'));
   assert.equal(allFiles.length - after.length, 1);
 });
+
+test('Vermögen: Posten, Gold in Gramm, Zu-/Abgänge, Zekât-Vorschlag, nichts wird abgezogen', async () => {
+  const c = client();
+  await c('POST', '/api/register', { name: 'Verm', email: 'verm@example.com', password: 'geheim123' });
+  const today = new Date().toISOString().slice(0, 10);
+  await c('POST', '/api/incomes', { name: 'Gehalt', amount: '3000' });
+  const before = (await c('GET', '/api/summary?month=' + today.slice(0, 7))).data;
+
+  await c('POST', '/api/assets', { type: 'konto', name: 'Tagesgeld', quantity: '12.000', zakat: 'on' });
+  await c('POST', '/api/assets', { type: 'bargeld', name: 'Bargeld', quantity: '800', zakat: 'on' });
+  const gold = (await c('POST', '/api/assets', { type: 'gold', name: 'Goldarmreifen', quantity: '50', purity: '0.9167', zakat: 'on' })).data;
+  await c('POST', '/api/assets', { type: 'aktien', name: 'ETF', quantity: '5000', zakat: 'on' });
+  await c('POST', '/api/assets', { type: 'auto', name: 'Auto', quantity: '15000' });
+
+  let a = (await c('GET', '/api/assets')).data;
+  assert.equal(a.assets.find((x) => x.type === 'gold').value, null, 'ohne Goldpreis kein Wert');
+  assert.ok(a.missingPrice);
+  assert.equal(a.nisab, null);
+
+  await c('PUT', '/api/settings/prices', { gold: '100', silver: '1,2' });
+  // 20 g dazugekauft, 10 g verkauft
+  await c('POST', `/api/assets/${gold.id}/moves`, { direction: 'zugang', date: today, amount: '20', note: 'gekauft' });
+  await c('POST', `/api/assets/${gold.id}/moves`, { direction: 'abgang', date: today, amount: '10' });
+  a = (await c('GET', '/api/assets')).data;
+  const g = a.assets.find((x) => x.type === 'gold');
+  assert.equal(g.amount, 60);
+  assert.equal(g.value, Math.round(60 * 0.9167 * 100 * 100) / 100);
+  assert.equal(a.nisab, 8500);
+  assert.equal(a.totals.total, Math.round((12000 + 800 + g.value + 5000 + 15000) * 100) / 100);
+  assert.equal(a.totals.zakatable, Math.round((12000 + 800 + g.value + 5000) * 100) / 100);
+  assert.deepEqual(a.zakatCalc, { cash: 12800, gold: g.value, other: 5000 });
+
+  // Vermögen ändert nichts an der Monatsrechnung
+  const after = (await c('GET', '/api/summary?month=' + today.slice(0, 7))).data;
+  assert.equal(after.available, before.available);
+  assert.equal(after.assetsTotal, a.totals.total);
+
+  // Bewegung löschen, Posten löschen
+  await c('DELETE', `/api/asset-moves/${g.moves.find((m) => m.amount < 0).id}`);
+  assert.equal((await c('GET', '/api/assets')).data.assets.find((x) => x.type === 'gold').amount, 70);
+  const other = client();
+  await other('POST', '/api/register', { name: 'Fremd4', email: 'fremd4@example.com', password: 'geheim123' });
+  assert.equal((await other('DELETE', `/api/assets/${gold.id}`)).status, 404);
+  assert.equal((await other('GET', '/api/assets')).data.assets.length, 0);
+  // Beleg an Vermögensposten
+  const up = await fetch(`${base}/api/attachments?type=asset&id=${gold.id}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/pdf', Cookie: c.cookie() }, body: Buffer.from('%PDF-1.4 rechnung') });
+  assert.equal(up.status, 200);
+  assert.equal((await c('DELETE', `/api/assets/${gold.id}`)).status, 200);
+  assert.equal((await c('GET', '/api/assets')).data.assets.length, 4);
+});

@@ -142,12 +142,33 @@ if (!hasColumn('fixed_costs', 'kind')) db.exec("ALTER TABLE fixed_costs ADD COLU
 if (!hasColumn('debt_payments', 'type')) db.exec("ALTER TABLE debt_payments ADD COLUMN type TEXT NOT NULL DEFAULT 'zahlung'");
 if (!hasColumn('entries', 'shop')) db.exec("ALTER TABLE entries ADD COLUMN shop TEXT NOT NULL DEFAULT ''");
 
-// Belege (Fotos/PDFs) – beliebig viele pro Ausgabe, Schuld, Schulden-Zahlung oder Zekât-Zahlung
+// Belege (Fotos/PDFs) – beliebig viele pro Ausgabe, Schuld, Schulden-Zahlung, Zekât-Zahlung oder Vermögensposten
+// Ältere Datenbanken kennen 'asset' noch nicht: Tabelle einmalig mit erweiterter Prüfung neu aufbauen (Daten bleiben).
+{
+  const old = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'attachments'").get();
+  if (old && !old.sql.includes("'asset'")) {
+    db.exec(`BEGIN;
+      CREATE TABLE attachments_new (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  owner_type TEXT NOT NULL CHECK (owner_type IN ('entry','debt','debt_payment','zakat_payment','asset')),
+  owner_id INTEGER NOT NULL,
+  file_name TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO attachments_new SELECT id, user_id, owner_type, owner_id, file_name, file_type, file_path, created_at FROM attachments;
+      DROP TABLE attachments;
+      ALTER TABLE attachments_new RENAME TO attachments;
+      COMMIT;`);
+  }
+}
 db.exec(`
 CREATE TABLE IF NOT EXISTS attachments (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  owner_type TEXT NOT NULL CHECK (owner_type IN ('entry','debt','debt_payment','zakat_payment')),
+  owner_type TEXT NOT NULL CHECK (owner_type IN ('entry','debt','debt_payment','zakat_payment','asset')),
   owner_id INTEGER NOT NULL,
   file_name TEXT NOT NULL,
   file_type TEXT NOT NULL,
@@ -159,6 +180,34 @@ INSERT INTO attachments (user_id, owner_type, owner_id, file_name, file_type, fi
   SELECT y.user_id, 'zakat_payment', p.id, COALESCE(p.file_name, 'beleg'), p.file_type, p.file_path
   FROM zakat_payments p JOIN zakat_years y ON y.id = p.year_id WHERE p.file_path IS NOT NULL;
 UPDATE zakat_payments SET file_name = NULL, file_type = NULL, file_path = NULL WHERE file_path IS NOT NULL;
+`);
+
+// Vermögen: Posten (Euro-Wert oder Gramm bei Edelmetallen) mit Zu-/Abgängen; reine Übersicht
+db.exec(`
+CREATE TABLE IF NOT EXISTS assets (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  quantity REAL NOT NULL DEFAULT 0,
+  purity REAL,
+  zakat INTEGER NOT NULL DEFAULT 1,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (date('now'))
+);
+CREATE TABLE IF NOT EXISTS asset_moves (
+  id INTEGER PRIMARY KEY,
+  asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
 `);
 
 const CATEGORIES = [
@@ -395,6 +444,7 @@ function summaryFor(userId, month) {
     debtsOpen: round2(debts.filter((d) => d.direction === 'schuld').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
     receivablesOpen: round2(debts.filter((d) => d.direction === 'forderung').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
     zakatOpen: zakatFor(userId).totals.open,
+    assetsTotal: assetsFor(userId).totals.total,
     upcomingBirthdays: birthdaysFor(userId).filter((b) => b.daysUntil <= 30).slice(0, 5)
       .map((b) => ({ name: b.name, nextDate: b.nextDate, daysUntil: b.daysUntil, turns: b.turns, gift: b.gift })),
   };
@@ -833,6 +883,9 @@ route('GET', '/api/export.csv', ({ user, res }) => {
     if (!b.gifts.length) rows.push(['Geburtstag', b.name, date, '', '', '', '', '']);
     for (const g of b.gifts) rows.push(['Geburtstag', b.name, date, g.year, g.idea, g.budget, g.price, g.status]);
   }
+  rows.push([], ['Vermögen', 'Art', 'Bezeichnung', 'Menge', 'Einheit', 'Wert (€)', 'Zekât', 'Notiz']);
+  for (const a of assetsFor(user.id).assets)
+    rows.push(['Vermögen', a.typeLabel, a.name, a.amount, a.unit === 'g' ? 'g' : '€', a.value ?? '', a.zakat ? 'ja' : 'nein', a.note]);
   rows.push([], ['Zekât-Jahr', 'Art', 'Datum', 'Betrag', 'Empfänger', 'Notiz', 'Soll im Jahr', 'Belege']);
   for (const y of zakatFor(user.id).years) {
     if (!y.payments.length) rows.push([y.label, '', '', '', '', '', y.due, '']);
@@ -936,12 +989,128 @@ route('DELETE', '/api/zakat/payments/:id', ({ user, params }) => {
   if (p.entry_id) deleteEntry(user.id, p.entry_id);
   return { ok: true };
 });
+// ---------- Vermögen ----------
+// Arten: Einheit (eur oder g = Gramm) und ob sie standardmäßig für Zekât zählen
+const ASSET_TYPES = {
+  bargeld: { label: 'Bargeld', unit: 'eur', zakat: true },
+  konto: { label: 'Bankkonto / Tagesgeld', unit: 'eur', zakat: true },
+  gold: { label: 'Gold', unit: 'g', zakat: true },
+  silber: { label: 'Silber', unit: 'g', zakat: true },
+  aktien: { label: 'Aktien / ETF / Fonds', unit: 'eur', zakat: true },
+  krypto: { label: 'Krypto', unit: 'eur', zakat: true },
+  immobilie: { label: 'Immobilie', unit: 'eur', zakat: false },
+  auto: { label: 'Auto / Fahrzeug', unit: 'eur', zakat: false },
+  sonstiges: { label: 'Sonstiges', unit: 'eur', zakat: false },
+};
+const NISAB_GOLD_G = 85;
+function getSetting(userId, key) {
+  const r = db.prepare('SELECT value FROM user_settings WHERE user_id = ? AND key = ?').get(userId, key);
+  return r ? Number(r.value) : null;
+}
+function setSetting(userId, key, value) {
+  if (value == null) db.prepare('DELETE FROM user_settings WHERE user_id = ? AND key = ?').run(userId, key);
+  else db.prepare(`INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?)
+    ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value`).run(userId, key, String(value));
+}
+function assetsFor(userId) {
+  const prices = { gold: getSetting(userId, 'gold_price_g'), silber: getSetting(userId, 'silver_price_g') };
+  const moveStmt = db.prepare('SELECT * FROM asset_moves WHERE asset_id = ? ORDER BY date DESC, id DESC');
+  const list = db.prepare('SELECT * FROM assets WHERE user_id = ? ORDER BY type, name').all(userId).map((a) => {
+    const t = ASSET_TYPES[a.type] || ASSET_TYPES.sonstiges;
+    const moves = moveStmt.all(a.id).map((m) => ({ ...m }));
+    const amount = round2(a.quantity + moves.reduce((s, m) => s + m.amount, 0));
+    let value = amount;
+    if (t.unit === 'g') {
+      const price = prices[a.type];
+      value = price != null ? round2(amount * (a.purity ?? 1) * price) : null;
+    }
+    return { ...a, zakat: !!a.zakat, unit: t.unit, typeLabel: t.label, moves, amount, value, files: attCount('asset', a.id) };
+  });
+  const sum = (f) => round2(list.filter(f).reduce((s, a) => s + (a.value || 0), 0));
+  const zak = (types) => sum((a) => a.zakat && types.includes(a.type));
+  const byType = Object.keys(ASSET_TYPES).map((k) => ({ type: k, label: ASSET_TYPES[k].label, value: sum((a) => a.type === k),
+    grams: ASSET_TYPES[k].unit === 'g' ? round2(list.filter((a) => a.type === k).reduce((s, a) => s + a.amount, 0)) : null }))
+    .filter((t) => list.some((a) => a.type === t.type));
+  return {
+    assets: list, byType, prices, types: ASSET_TYPES,
+    missingPrice: list.some((a) => a.value == null),
+    totals: { total: sum(() => true), zakatable: sum((a) => a.zakat) },
+    nisab: prices.gold != null ? round2(prices.gold * NISAB_GOLD_G) : null,
+    // Vorschlag für den Zekât-Rechner (nur Posten, die als „zählt für Zekât“ markiert sind)
+    zakatCalc: { cash: zak(['bargeld', 'konto']), gold: zak(['gold', 'silber']), other: zak(['aktien', 'krypto', 'immobilie', 'auto', 'sonstiges']) },
+  };
+}
+function assetFields(body) {
+  const type = ASSET_TYPES[body.type] ? body.type : 'sonstiges';
+  const metal = ASSET_TYPES[type].unit === 'g';
+  let purity = null;
+  if (metal) {
+    // Feinheit nicht auf Cent runden (22 Karat = 0,9167)
+    purity = body.purity === '' || body.purity == null ? 1 : Number(String(body.purity).replace(',', '.'));
+    if (!Number.isFinite(purity) || purity <= 0 || purity > 1) throw new HttpError(400, 'Feinheit ist ungültig.');
+    purity = Math.round(purity * 10000) / 10000;
+  }
+  return [
+    type, str(body.name, 'Bezeichnung', 120),
+    body.quantity === '' || body.quantity == null ? 0 : num(body.quantity, metal ? 'Menge (g)' : 'Wert'),
+    purity, isChecked(body.zakat) ? 1 : 0,
+    typeof body.note === 'string' ? body.note.trim().slice(0, 300) : '',
+  ];
+}
+function ownAsset(userId, id) {
+  const a = db.prepare('SELECT * FROM assets WHERE id = ? AND user_id = ?').get(id, userId);
+  if (!a) throw new HttpError(404, 'Nicht gefunden.');
+  return a;
+}
+route('GET', '/api/assets', ({ user }) => assetsFor(user.id));
+route('POST', '/api/assets', ({ user, body }) => {
+  const id = Number(db.prepare('INSERT INTO assets (type, name, quantity, purity, zakat, note, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(...assetFields(body), user.id).lastInsertRowid);
+  return { ok: true, id };
+});
+route('PUT', '/api/assets/:id', ({ user, body, params }) => {
+  ownAsset(user.id, params.id);
+  db.prepare('UPDATE assets SET type = ?, name = ?, quantity = ?, purity = ?, zakat = ?, note = ? WHERE id = ? AND user_id = ?')
+    .run(...assetFields(body), params.id, user.id);
+  return { ok: true };
+});
+route('DELETE', '/api/assets/:id', ({ user, params }) => {
+  ownAsset(user.id, params.id);
+  deleteAttachments('asset', [params.id]);
+  db.prepare('DELETE FROM assets WHERE id = ? AND user_id = ?').run(params.id, user.id);
+  return { ok: true };
+});
+// Zugang (+) oder Abgang (−): z. B. „20 g Gold gekauft“, „500 € aufs Tagesgeld“
+route('POST', '/api/assets/:id/moves', ({ user, body, params }) => {
+  const a = ownAsset(user.id, params.id);
+  const amount = num(body.amount, 'Menge', { min: 0.01 });
+  const signed = body.direction === 'abgang' ? -amount : amount;
+  const id = Number(db.prepare('INSERT INTO asset_moves (asset_id, date, amount, note) VALUES (?, ?, ?, ?)')
+    .run(a.id, dateStr(body.date), signed, typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '').lastInsertRowid);
+  return { ok: true, id };
+});
+route('DELETE', '/api/asset-moves/:id', ({ user, params }) => {
+  const m = db.prepare(`SELECT m.id FROM asset_moves m JOIN assets a ON a.id = m.asset_id WHERE m.id = ? AND a.user_id = ?`)
+    .get(params.id, user.id);
+  if (!m) throw new HttpError(404, 'Nicht gefunden.');
+  db.prepare('DELETE FROM asset_moves WHERE id = ?').run(m.id);
+  return { ok: true };
+});
+// Aktuelle Grammpreise für Gold (24 Karat) und Silber (Feinsilber)
+route('PUT', '/api/settings/prices', ({ user, body }) => {
+  const val = (v, f) => (v === '' || v == null ? null : num(v, f, { min: 0.01, max: 100000 }));
+  setSetting(user.id, 'gold_price_g', val(body.gold, 'Goldpreis'));
+  setSetting(user.id, 'silver_price_g', val(body.silver, 'Silberpreis'));
+  return { ok: true };
+});
+
 // ---------- Belege (Fotos & PDFs) ----------
 const ATT_OWNER_SQL = {
   entry: 'SELECT 1 FROM entries WHERE id = ? AND user_id = ?',
   debt: 'SELECT 1 FROM debts WHERE id = ? AND user_id = ?',
   debt_payment: 'SELECT 1 FROM debt_payments p JOIN debts d ON d.id = p.debt_id WHERE p.id = ? AND d.user_id = ?',
   zakat_payment: 'SELECT 1 FROM zakat_payments p JOIN zakat_years y ON y.id = p.year_id WHERE p.id = ? AND y.user_id = ?',
+  asset: 'SELECT 1 FROM assets WHERE id = ? AND user_id = ?',
 };
 const MAX_FILES_PER_ITEM = 20;
 function attOwner(userId, query) {

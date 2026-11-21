@@ -507,13 +507,14 @@ const GIFT_STATUS = { offen: 'noch offen', idee: 'Idee', gekauft: 'gekauft', ver
 const inDays = (n) => n === 0 ? 'heute' : n === 1 ? 'morgen' : `in ${n} Tagen`;
 
 function renderTeaser(s) {
-  const show = s.debtsOpen > 0 || s.receivablesOpen > 0 || s.zakatOpen > 0 || s.upcomingBirthdays.length > 0;
+  const show = s.debtsOpen > 0 || s.receivablesOpen > 0 || s.zakatOpen > 0 || s.assetsTotal > 0 || s.upcomingBirthdays.length > 0;
   $('#listsTeaser').hidden = !show;
   if (!show) return;
   $('#teaserCalc').innerHTML =
     (s.debtsOpen > 0 ? `<dt>Offene Schulden</dt><dd class="neg">${fmt(s.debtsOpen)}</dd>` : '') +
     (s.receivablesOpen > 0 ? `<dt>Bekomme ich zurück</dt><dd class="pos">${fmt(s.receivablesOpen)}</dd>` : '') +
-    (s.zakatOpen > 0 ? `<dt>Zekât noch zu geben</dt><dd>${fmt(s.zakatOpen)}</dd>` : '');
+    (s.zakatOpen > 0 ? `<dt>Zekât noch zu geben</dt><dd>${fmt(s.zakatOpen)}</dd>` : '') +
+    (s.assetsTotal > 0 ? `<dt>Vermögen <span class="muted small">(nur Übersicht)</span></dt><dd>${fmt(s.assetsTotal)}</dd>` : '');
   $('#teaserBirthdays').innerHTML = s.upcomingBirthdays.map((b) => `
     <li data-goto-lists="geburtstag">
       <div class="main"><div class="title">🎂 ${esc(b.name)}${b.turns ? ` (wird ${b.turns})` : ''}</div>
@@ -533,12 +534,14 @@ $$('[data-list]').forEach((b) => b.addEventListener('click', () => { state.list 
 $('#listAdd').addEventListener('click', () => {
   if (state.list === 'geburtstag') openBirthdayDialog();
   else if (state.list === 'zekat') openZakatYearDialog();
+  else if (state.list === 'vermoegen') openAssetDialog();
   else openDebtDialog({ direction: state.list });
 });
 
 const LIST_TEXT = {
   schuld: { title: 'Meine Schulden', add: 'Schuld', hint: 'Was du noch zurückzahlen musst – Kredite, Ratenkäufe, geliehenes Geld. Mit „± Eintragen“ erfasst du Teilzahlungen oder wenn du dir noch mehr geliehen hast – der offene Betrag rechnet sich selbst.', empty: 'Keine Schulden eingetragen. 🎉' },
   forderung: { title: 'Bekomme ich zurück', add: 'Forderung', hint: 'Geld, das du verliehen hast oder das dir noch jemand schuldet. Mit „± Eintragen“ erfasst du Teil-Rückzahlungen oder wenn du noch mehr verliehen hast.', empty: 'Niemand schuldet dir etwas.' },
+  vermoegen: { title: 'Mein Vermögen', add: 'Posten', hint: 'Nur zur Übersicht: Konten, Bargeld, Gold, Aktien & Co. Nichts davon wird von deinem verfügbaren Geld oder deinen Schulden abgezogen. Gold und Silber in Gramm – mit dem aktuellen Grammpreis rechnet die App den Wert aus.', empty: 'Noch nichts eingetragen. Tippe auf „＋ Neu“, z. B. für dein Tagesgeld oder deinen Goldschmuck.' },
   zekat: { title: 'Zekât', add: 'Jahr', hint: 'Pro Jahr: wie viel Zekât du geben musst, was du schon gegeben hast und was noch offen ist. Alle Zahlungen mit Belegen bleiben als Dokumentation über die Jahre erhalten.', empty: 'Noch kein Zekât-Jahr angelegt. Tippe auf „＋ Neu“.' },
   geburtstag: { title: 'Geburtstage & Geschenke', add: 'Geburtstag', hint: 'Sortiert nach dem nächsten Geburtstag. Tippe auf eine Person, um das Geschenk für dieses Jahr zu planen.', empty: 'Noch keine Geburtstage eingetragen.' },
 };
@@ -551,6 +554,7 @@ async function renderLists() {
   $('#listEmpty').textContent = t.empty;
   if (state.list === 'geburtstag') return renderBirthdays();
   if (state.list === 'zekat') return renderZakat();
+  if (state.list === 'vermoegen') return renderAssets();
 
   const all = await api('GET', '/api/debts');
   const debts = all.filter((d) => d.direction === state.list).sort((a, b) => a.done - b.done);
@@ -822,7 +826,7 @@ function calcZakat(c) {
   return { wealth, nisab, due, below: !!nisab && wealth < nisab };
 }
 
-function openZakatYearDialog(item) {
+function openZakatYearDialog(item, { autofill = false } = {}) {
   const isEdit = !!item;
   const c = item?.calc || {};
   const num2 = (v) => v != null && v !== '' ? String(v).replace('.', ',') : '';
@@ -834,9 +838,10 @@ function openZakatYearDialog(item) {
         <label>Zu geben bis <input type="date" name="due_date" value="${esc(item?.due_date ?? '')}"></label>
       </div>
       <label>Zekât für dieses Jahr (€) <input name="due" inputmode="decimal" value="${num2(item?.due || '')}" placeholder="Betrag oder Rechner nutzen"></label>
-      <details class="calc-box" ${!isEdit ? 'open' : ''}>
+      <details class="calc-box" ${!isEdit || autofill ? 'open' : ''}>
         <summary>🧮 Zekât-Rechner (2,5 %)</summary>
         <div class="stack">
+          <button type="button" class="btn small" id="calcFromAssets">📥 Werte aus „Vermögen“ übernehmen</button>
           ${CALC_FIELDS.map(([k, l]) => `<label>${l} <input name="calc_${k}" inputmode="decimal" value="${num2(c[k])}" placeholder="0"></label>`).join('')}
           <label>Nisab-Grenze (€) <input name="calc_nisab" inputmode="decimal" value="${num2(c.nisab)}" placeholder="optional, aktueller Wert von ca. 85 g Gold"></label>
           <div class="calc-result" id="calcResult"></div>
@@ -867,6 +872,17 @@ function openZakatYearDialog(item) {
       $('#calcApply', body).addEventListener('click', () => {
         $('[name=due]', body).value = String(show().due).replace('.', ',');
       });
+      const fillFromAssets = async () => {
+        const a = await api('GET', '/api/assets');
+        const set = (k, v) => { $(`[name=calc_${k}]`, body).value = v ? String(v).replace('.', ',') : ''; };
+        set('cash', a.zakatCalc.cash); set('gold', a.zakatCalc.gold); set('other', a.zakatCalc.other);
+        if (a.nisab) set('nisab', a.nisab);
+        const r = show();
+        toast(a.missingPrice ? 'Übernommen – Gold-/Silberpreis fehlt noch, bitte unter „Vermögen“ eintragen.' : 'Werte aus dem Vermögen übernommen');
+        return r;
+      };
+      $('#calcFromAssets', body).addEventListener('click', fillFromAssets);
+      if (autofill) fillFromAssets().then((r) => { $('[name=due]', body).value = String(r.due).replace('.', ','); });
       body.addEventListener('click', async (e) => {
         const del = e.target.closest('[data-zdel]');
         if (del && confirm('Diese Zahlung löschen? Angehängte Belege werden mit gelöscht.')) {
@@ -1072,6 +1088,177 @@ function openZakatReport(z) {
       · noch offen: <b>${fmt(z.totals.open)}</b>${z.totals.fitre ? ` · Fitre: ${fmt(z.totals.fitre)}` : ''}${z.totals.sadaka ? ` · Sadaka: ${fmt(z.totals.sadaka)}` : ''}</div>
     ${rows}</body></html>`);
   w.document.close();
+}
+
+// ---------- Vermögen (nur Übersicht) ----------
+const ASSET_ICON = { bargeld: '💶', konto: '🏦', gold: '🥇', silber: '🥈', aktien: '📈', krypto: '🪙', immobilie: '🏠', auto: '🚗', sonstiges: '📦' };
+const PURITY = {
+  gold: [[1, '24 Karat (999)'], [0.9167, '22 Karat (916)'], [0.875, '21 Karat (875)'], [0.75, '18 Karat (750)'],
+    [0.585, '14 Karat (585)'], [0.375, '9 Karat (375)'], [0.333, '8 Karat (333)']],
+  silber: [[1, 'Feinsilber (999)'], [0.925, 'Sterling (925)'], [0.9, '900'], [0.835, '835'], [0.8, '800']],
+};
+const purityLabel = (type, v) => (PURITY[type] || []).find(([p]) => Math.abs(p - v) < 0.001)?.[1].split(' (')[0] || `${Math.round(v * 1000)}`;
+const fmtG = (g) => `${g.toLocaleString('de-DE', { maximumFractionDigits: 2 })} g`;
+let assetCache = null;
+
+async function renderAssets() {
+  const a = await api('GET', '/api/assets');
+  assetCache = a;
+  const gramsOf = (t) => a.byType.find((x) => x.type === t)?.grams;
+  $('#listSummary').innerHTML = `
+    ${a.assets.length ? `<div class="summary-row">
+      <div><small>Vermögen gesamt</small><strong>${fmt(a.totals.total)}</strong></div>
+      <div><small>davon zählt für Zekât</small><strong>${fmt(a.totals.zakatable)}</strong></div>
+      ${gramsOf('gold') ? `<div><small>Gold</small><strong>${fmtG(gramsOf('gold'))}</strong></div>` : ''}
+    </div>` : ''}
+    <div class="price-box">
+      <div>🥇 Gold (24 K): <b>${a.prices.gold != null ? fmt(a.prices.gold) + '/g' : '–'}</b>
+        · 🥈 Silber: <b>${a.prices.silber != null ? fmt(a.prices.silber) + '/g' : '–'}</b></div>
+      ${a.nisab ? `<div class="muted small">Nisab (85 g Gold) = ${fmt(a.nisab)}${a.totals.zakatable >= a.nisab ? ' – du liegst darüber' : ' – du liegst darunter'}</div>` : ''}
+      ${a.missingPrice ? '<div class="neg small">⚠ Bitte Grammpreis eintragen, damit Gold/Silber bewertet werden.</div>' : ''}
+      <div class="price-actions">
+        <button type="button" class="btn small" id="editPrices">Preise ändern</button>
+        ${a.assets.length ? '<button type="button" class="btn small primary" id="zakatFromAssets">🧮 Zekât damit berechnen</button>' : ''}
+      </div>
+    </div>`;
+  $('#listEmpty').hidden = a.assets.length > 0;
+  const groups = a.byType.map((t) => `
+    <li class="group-head"><span>${ASSET_ICON[t.type]} ${esc(t.label)}</span><span class="num">${t.grams != null ? fmtG(t.grams) + ' · ' : ''}${fmt(t.value)}</span></li>
+    ${a.assets.filter((x) => x.type === t.type).map((x) => `
+      <li data-id="${x.id}">
+        <div class="grow">
+          <div class="title">${esc(x.name)}</div>
+          <div class="meta">${x.unit === 'g' ? `${fmtG(x.amount)} · ${purityLabel(x.type, x.purity ?? 1)}` : ''}${x.unit === 'g' ? ' · ' : ''}${x.zakat ? 'zählt für Zekât' : 'keine Zekât'}${x.files ? ` · <span class="clip">📎 ${x.files}</span>` : ''}</div>
+          ${x.note ? `<div class="meta">${esc(x.note)}</div>` : ''}
+        </div>
+        <div class="row-actions">
+          <strong class="num">${x.value == null ? '<span class="neg small">Preis fehlt</span>' : fmt(x.value)}</strong>
+          <button type="button" class="btn small" data-amove="${x.id}">± Eintragen</button>
+        </div>
+      </li>`).join('')}`).join('');
+  $('#listBody').innerHTML = groups;
+  $$('#listBody li[data-id]').forEach((li) => li.addEventListener('click', (e) => {
+    const x = a.assets.find((y) => y.id === Number(li.dataset.id));
+    if (e.target.closest('[data-amove]')) openAssetMoveDialog(x); else openAssetDialog(x);
+  }));
+  $('#editPrices').addEventListener('click', () => openPriceDialog(a.prices));
+  $('#zakatFromAssets')?.addEventListener('click', async () => {
+    const z = await api('GET', '/api/zakat');
+    zakatCache = z;
+    const year = String(new Date().getFullYear());
+    openZakatYearDialog(z.years.find((y) => y.label === year), { autofill: true });
+  });
+}
+
+function openPriceDialog(prices) {
+  const v = (n) => n != null ? String(n).replace('.', ',') : '';
+  openDialog({
+    title: 'Aktuelle Grammpreise',
+    html: `
+      <label>Goldpreis pro Gramm, 24 Karat (€) <input name="gold" inputmode="decimal" value="${v(prices.gold)}" placeholder="z. B. 95,50"></label>
+      <label>Silberpreis pro Gramm, Feinsilber (€) <input name="silver" inputmode="decimal" value="${v(prices.silber)}" placeholder="z. B. 1,05"></label>
+      <div class="hint">Den aktuellen Preis findest du z. B. bei deiner Bank, einem Goldhändler oder Juwelier. Schmuck mit weniger Karat rechnet die App automatisch anteilig.</div>`,
+    onSave: (d) => api('PUT', '/api/settings/prices', d),
+  });
+}
+
+function openAssetDialog(item) {
+  const isEdit = !!item;
+  const types = assetCache?.types || {};
+  let type = item?.type || 'konto';
+  const qtyLabel = (t) => (types[t]?.unit === 'g'
+    ? (isEdit && item.moves.length ? 'Anfangsmenge (g)' : 'Menge (Gramm)')
+    : (isEdit && item.moves.length ? 'Anfangswert (€)' : 'Wert (€)'));
+  const purityOptions = (t) => (PURITY[t] || []).map(([p, l]) =>
+    `<option value="${p}" ${Math.abs((item?.purity ?? (t === 'gold' ? 0.9167 : 1)) - p) < 0.001 ? 'selected' : ''}>${l}</option>`).join('');
+  openDialog({
+    title: isEdit ? item.name : 'Vermögen hinzufügen',
+    html: `
+      <label>Art <select name="type">${Object.entries(types).map(([k, t]) =>
+        `<option value="${k}" ${k === type ? 'selected' : ''}>${ASSET_ICON[k]} ${t.label}</option>`).join('')}</select></label>
+      <label>Bezeichnung <input name="name" required maxlength="120" value="${esc(item?.name ?? '')}" placeholder="z. B. Sparkasse Tagesgeld, Goldarmreifen"></label>
+      <div class="row2">
+        <label><span id="qtyLabel">${qtyLabel(type)}</span> <input name="quantity" inputmode="decimal" required value="${item ? String(item.quantity).replace('.', ',') : ''}" placeholder="0"></label>
+        <label id="purityWrap" ${types[type]?.unit === 'g' ? '' : 'hidden'}>Feinheit <select name="purity">${purityOptions(type)}</select></label>
+      </div>
+      ${isEdit && item.moves.length ? `<div class="hint">Aktueller Stand: <b>${item.unit === 'g' ? fmtG(item.amount) : fmt(item.amount)}</b>${item.unit === 'g' && item.value != null ? ` = ${fmt(item.value)}` : ''}</div>` : ''}
+      <label class="check"><input type="checkbox" name="zakat" ${(item ? item.zakat : types[type]?.zakat) ? 'checked' : ''}> Zählt für die Zekât</label>
+      <div class="hint">Selbst genutztes Haus und Auto zählen normalerweise nicht. Im Zweifel bei der Gemeinde nachfragen.</div>
+      <label>Notiz <input name="note" maxlength="300" value="${esc(item?.note ?? '')}" placeholder="optional, z. B. Schließfach, Depot bei …"></label>
+      ${isEdit ? attWidget('asset', item.id, 'Belege (z. B. Kaufrechnung, Kontoauszug)') : filePicker('Belege (optional)')}
+      ${isEdit && item.moves.length ? `<div class="subhead">Verlauf</div>
+        <ul class="history">
+          <li><span>Anfangsbestand</span><span class="num">${item.unit === 'g' ? fmtG(item.quantity) : fmt(item.quantity)}</span></li>
+          ${item.moves.slice().reverse().map((m) => `<li>
+            <span>${fmtDate(m.date)} · ${m.amount > 0 ? 'Zugang' : 'Abgang'}${m.note ? ' · ' + esc(m.note) : ''}</span>
+            <span class="num ${m.amount > 0 ? 'pos' : 'neg'}">${m.amount > 0 ? '+' : '−'}${item.unit === 'g' ? fmtG(Math.abs(m.amount)) : fmt(Math.abs(m.amount))}
+              <button type="button" class="x-btn" data-amdel="${m.id}" aria-label="Eintrag löschen">×</button></span>
+          </li>`).join('')}
+        </ul>` : ''}`,
+    onOpen: (body) => {
+      const sel = $('[name=type]', body);
+      sel.addEventListener('change', () => {
+        type = sel.value;
+        $('#qtyLabel', body).textContent = qtyLabel(type);
+        $('#purityWrap', body).hidden = types[type]?.unit !== 'g';
+        $('[name=purity]', body).innerHTML = purityOptions(type);
+        if (!isEdit) $('[name=zakat]', body).checked = !!types[type]?.zakat;
+      });
+      body.addEventListener('click', async (e) => {
+        const del = e.target.closest('[data-amdel]');
+        if (!del || !confirm('Diesen Eintrag löschen?')) return;
+        await api('DELETE', `/api/asset-moves/${del.dataset.amdel}`);
+        del.closest('li').remove(); attChanged = true;
+      });
+    },
+    onSave: async (d) => {
+      if (types[d.type]?.unit !== 'g') delete d.purity;
+      if (isEdit) return api('PUT', `/api/assets/${item.id}`, d);
+      const { id } = await api('POST', '/api/assets', d);
+      await uploadPending('asset', id);
+    },
+    onDelete: isEdit && (() => api('DELETE', `/api/assets/${item.id}`)),
+  });
+}
+
+function openAssetMoveDialog(asset) {
+  const g = asset.unit === 'g';
+  const show = (n) => (g ? fmtG(n) : fmt(n));
+  openDialog({
+    title: `${ASSET_ICON[asset.type]} ${asset.name}`,
+    html: `
+      <p class="muted small" style="margin:0">Aktuell: <strong>${show(asset.amount)}</strong>${g && asset.value != null ? ` = ${fmt(asset.value)}` : ''}</p>
+      <fieldset>
+        <legend>Was ist passiert?</legend>
+        <label class="radio"><input type="radio" name="direction" value="zugang" checked> Dazugekommen ${g ? '(z. B. gekauft, geschenkt bekommen)' : '(z. B. eingezahlt, gespart)'}</label>
+        <label class="radio"><input type="radio" name="direction" value="abgang"> Weggegangen ${g ? '(z. B. verkauft, verschenkt)' : '(z. B. abgehoben, ausgegeben)'}</label>
+        <label class="radio"><input type="radio" name="direction" value="stand"> Neuen Stand eintragen ${g ? '(z. B. nachgewogen)' : '(z. B. laut Kontoauszug)'}</label>
+      </fieldset>
+      <div class="row2">
+        <label><span id="mvLabel">${g ? 'Menge (g)' : 'Betrag (€)'}</span> <input name="amount" inputmode="decimal" required placeholder="0"></label>
+        <label>Datum <input type="date" name="date" required value="${todayIso()}"></label>
+      </div>
+      <label>Notiz <input name="note" maxlength="200" placeholder="optional, z. B. Hochzeitsgeschenk, Sparplan"></label>
+      <div class="hint" id="mvAfter"></div>`,
+    onOpen: (body) => {
+      const update = () => {
+        const dir = $('[name=direction]:checked', body).value;
+        const amt = parseAmount($('[name=amount]', body).value);
+        $('#mvLabel', body).textContent = dir === 'stand' ? (g ? 'Neuer Stand (g)' : 'Neuer Stand (€)') : (g ? 'Menge (g)' : 'Betrag (€)');
+        const after = dir === 'stand' ? amt : dir === 'abgang' ? asset.amount - amt : asset.amount + amt;
+        $('#mvAfter', body).innerHTML = amt ? `Danach: <strong>${show(Math.max(0, after))}</strong>` : '';
+      };
+      body.addEventListener('input', update); body.addEventListener('change', update); update();
+    },
+    onSave: async (d) => {
+      if (d.direction === 'stand') {
+        const delta = Math.round((parseAmount(d.amount) - asset.amount) * 100) / 100;
+        if (!delta) return;
+        d = { ...d, direction: delta > 0 ? 'zugang' : 'abgang', amount: String(Math.abs(delta)), note: d.note || 'Stand angepasst' };
+      }
+      await api('POST', `/api/assets/${asset.id}/moves`, d);
+    },
+  });
 }
 
 boot();

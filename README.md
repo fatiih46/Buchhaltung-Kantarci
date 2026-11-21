@@ -24,6 +24,10 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
     Teil-Rückzahlungen und „noch mehr verliehen“.
   - **Geburtstage & Geschenke** – sortiert nach dem nächsten Geburtstag, mit Alter, Geschenkidee, Budget,
     Preis und Status (Idee → gekauft → verschenkt), frühere Geschenke bleiben als Verlauf erhalten.
+  - **Vermögen** – nur zur Übersicht (wird nirgends abgezogen): Bargeld, Konten, Gold und Silber in Gramm mit
+    Feinheit (Wert über den eingetragenen Grammpreis), Aktien/ETF, Krypto, Immobilie, Auto, Sonstiges. Zu- und Abgänge
+    oder neuer Stand mit Verlauf, Belege möglich. Pro Posten einstellbar, ob er für die Zekât zählt; ein Knopf übernimmt
+    alles samt Nisab (85 g Gold) in den Zekât-Rechner.
   - **Zekât** – pro Jahr: wie viel zu geben ist (mit Rechner: 2,5 % vom Vermögen, Nisab-Grenze), was schon gegeben
     wurde und was noch offen ist. Jede Zahlung mit Datum, Empfänger, Notiz und optionalem **Beleg** (Foto oder PDF).
     Fitre und Sadaka werden mit dokumentiert. Archiv über alle Jahre und **Nachweis zum Drucken / als PDF**.
