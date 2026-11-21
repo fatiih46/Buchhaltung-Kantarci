@@ -59,6 +59,21 @@ Einstellungen über Umgebungsvariablen:
 | `DATA_DIR`      | `./data`  | Ordner für die Datenbank                               |
 | `SECURE_COOKIE` | –         | auf `1` setzen, wenn die App über HTTPS erreichbar ist |
 
+## Auf dem Raspberry Pi installieren
+
+Schritt-für-Schritt-Anleitung (mit automatischem Start, täglicher Sicherung und Zugriff von unterwegs):
+**[docs/RASPBERRY-PI.md](docs/RASPBERRY-PI.md)**
+
+Kurzfassung auf dem Pi:
+
+```bash
+git clone https://github.com/fatiih46/Buchhaltung-Kantarci.git
+cd Buchhaltung-Kantarci
+bash deploy/install-raspberry.sh
+```
+
+Sicherung von Hand: `npm run backup` (landet in `data/backups/`).
+
 ## Damit ihr beide vom Handy zugreifen könnt
 
 Die App muss auf einem Rechner laufen, den beide Handys erreichen:
