@@ -145,27 +145,40 @@ async function renderOverview() {
   const avail = $('#available');
   avail.textContent = fmt(s.available);
   avail.className = 'hero-amount ' + (s.available < 0 ? 'neg' : '');
-  $('#plannedHint').textContent = `Geplant ohne Zusatzbuchungen: ${fmt(s.plannedAvailable)}`;
-  $('#sIncome').textContent = fmt(s.income);
-  $('#sFixed').textContent = fmt(s.fixedTotal);
-  $('#sMore').textContent = fmt(s.extraMore);
-  $('#sLess').textContent = fmt(s.extraLess);
-  $('#sAvail').textContent = fmt(s.available);
-  $('#sAvail').className = 'total ' + (s.available < 0 ? 'neg' : 'pos');
+  $('#plannedHint').textContent = s.budgetLeft > 0
+    ? `${fmt(s.budgetLeft)} Budget sind noch reserviert – was davon übrig bleibt, kommt dazu.`
+    : `Geplant (nur Fixkosten & Budgets): ${fmt(s.plannedAvailable)}`;
+  $('#calc').innerHTML = `
+    <dt>Einkommen</dt><dd>${fmt(s.income)}</dd>
+    <dt>− Fixkosten</dt><dd>${fmt(s.fixedTotal)}</dd>
+    <dt>− Variable Ausgaben</dt><dd>${fmt(s.spent)}</dd>
+    ${s.budgetLeft > 0 ? `<dt>− Noch offenes Budget</dt><dd>${fmt(s.budgetLeft)}</dd>` : ''}
+    ${s.refunds > 0 ? `<dt>+ Einnahmen / Erstattungen</dt><dd>${fmt(s.refunds)}</dd>` : ''}
+    <dt class="total">= Verfügbar</dt><dd class="total ${s.available < 0 ? 'neg' : 'pos'}">${fmt(s.available)}</dd>`;
 
   renderTeaser(s);
-  const max = Math.max(1, ...s.categories.map((c) => Math.max(c.total, c.planned)));
+  const max = Math.max(1, ...s.categories.map((c) => c.fixed + Math.max(c.budget, c.spent)));
   $('#catEmpty').hidden = s.categories.length > 0;
-  $('#catList').innerHTML = s.categories.map((c) => {
-    const plannedW = (Math.min(c.planned, c.total) / max) * 100;
-    const extraW = (Math.max(0, c.extra) / max) * 100;
-    let sub = `Geplant ${fmt(c.planned)}`;
-    if (c.extra > 0) sub += ` · <span class="neg">+${fmt(c.extra)} mehr</span>`;
-    if (c.extra < 0) sub += ` · <span class="pos">${fmt(-c.extra)} weniger</span>`;
+  $('#catList').innerHTML = s.categories.filter((c) => c.total > 0).map((c) => {
+    const parts = [];
+    if (c.fixed) parts.push(`Fix ${fmt(c.fixed)}`);
+    if (c.budget) {
+      parts.push(`${fmt(c.spent)} von ${fmt(c.budget)} Budget`);
+      if (c.spent > c.budget) parts.push(`<span class="neg">⚠ ${fmt(c.spent - c.budget)} drüber</span>`);
+      else parts.push(`<span class="pos">noch ${fmt(c.budget - c.spent)}</span>`);
+    } else if (c.spent) parts.push(`ausgegeben ${fmt(c.spent)}${c.count ? ` (${c.count}×)` : ''}`);
+    const w = (v) => (v / max) * 100;
+    const within = Math.min(c.spent, c.budget);
+    const over = c.budget ? Math.max(0, c.spent - c.budget) : 0;
+    const rest = Math.max(0, c.budget - c.spent);
     return `<div class="cat-row">
       <div class="top"><span>${esc(c.name)}</span><strong class="num">${fmt(c.total)}</strong></div>
-      <div class="bar"><i style="width:${plannedW}%"></i><i class="extra" style="width:${extraW}%"></i></div>
-      <div class="sub">${sub}</div>
+      <div class="bar">
+        ${c.fixed ? `<i style="width:${w(c.fixed)}%"></i>` : ''}
+        ${c.budget ? `<i class="extra" style="width:${w(within)}%"></i><i class="rest" style="width:${w(rest)}%"></i>` : `<i class="extra" style="width:${w(c.spent)}%"></i>`}
+        ${over ? `<i class="over" style="width:${w(over)}%"></i>` : ''}
+      </div>
+      <div class="sub">${parts.join(' · ')}</div>
     </div>`;
   }).join('');
 }
@@ -192,38 +205,117 @@ async function renderPlan() {
     <ul class="list">${items.map((f) => `
       <li data-id="${f.id}">
         <div class="main">
-          <div class="title">${esc(f.name)}</div>
+          <div class="title">${esc(f.name)} ${f.kind === 'budget' ? '<span class="pill budget">Budget</span>' : ''}</div>
           <div class="meta">${fmt(f.amount)} ${INTERVAL_LABEL[f.interval]}${f.share < 100 ? ` · dein Anteil ${f.share.toLocaleString('de-DE')} %` : ''}</div>
         </div>
         <div class="right num">${fmt(monthly(f))}<div class="meta">/ Monat</div></div>
       </li>`).join('')}
     </ul>`).join('') : '<p class="muted small empty">Noch keine Fixkosten eingetragen.</p>';
-  $('#fixedTotal').textContent = fmt(fixed.reduce((s, f) => s + monthly(f), 0));
+  const fixSum = fixed.filter((f) => f.kind !== 'budget').reduce((s, f) => s + monthly(f), 0);
+  const budSum = fixed.filter((f) => f.kind === 'budget').reduce((s, f) => s + monthly(f), 0);
+  $('#fixedTotal').innerHTML = budSum
+    ? `${fmt(fixSum + budSum)}<div class="meta" style="font-weight:400">${fmt(fixSum)} fix + ${fmt(budSum)} Budgets</div>`
+    : fmt(fixSum);
   $$('#fixedList li[data-id]').forEach((li) => li.addEventListener('click', () =>
     openFixedDialog(fixed.find((f) => f.id === Number(li.dataset.id)))));
 }
 $('#addIncome').addEventListener('click', () => openIncomeDialog());
 $('#addFixed').addEventListener('click', () => openFixedDialog());
 
-// ---------- Buchungen ----------
+// ---------- Ausgaben: Liste ----------
+state.sub = 'list';
+$$('[data-sub]').forEach((b) => b.addEventListener('click', () => { state.sub = b.dataset.sub; render(); }));
 async function renderEntries() {
+  $$('[data-sub]').forEach((b) => b.classList.toggle('active', b.dataset.sub === state.sub));
+  $$('[data-subview]').forEach((v) => { v.hidden = v.dataset.subview !== state.sub; });
+  if (state.sub === 'stats') return renderStats();
   const entries = await api('GET', `/api/entries?month=${state.month}`);
+  const out = entries.filter((e) => e.kind === 'mehr').reduce((s, e) => s + e.amount, 0);
+  const inc = entries.filter((e) => e.kind === 'weniger').reduce((s, e) => s + e.amount, 0);
+  $('#entrySummary').innerHTML = entries.length ? `<div class="summary-row">
+      <div><small>Ausgegeben</small><strong class="neg">${fmt(out)}</strong></div>
+      ${inc ? `<div><small>Einnahmen / Erstattungen</small><strong class="pos">${fmt(inc)}</strong></div>` : ''}
+      <div><small>Anzahl</small><strong>${entries.length}</strong></div>
+    </div>` : '';
   $('#entryEmpty').hidden = entries.length > 0;
   $('#entryList').innerHTML = entries.map((e) => `
     <li data-id="${e.id}">
       <div class="main">
-        <div class="title">${esc(e.note || e.category)}</div>
+        <div class="title">${e.shop ? `<span class="shop-tag">${esc(e.shop)}</span>${e.note ? ' · ' : ''}` : ''}${esc(e.note || (e.shop ? '' : e.category))}</div>
         <div class="meta">${new Date(e.date + 'T00:00').toLocaleDateString('de-DE')} · ${esc(e.category)}</div>
       </div>
       <div class="right">
         <div class="num ${e.kind === 'mehr' ? 'neg' : 'pos'}">${e.kind === 'mehr' ? '−' : '+'}${fmt(e.amount)}</div>
-        <span class="pill ${e.kind}">${e.kind === 'mehr' ? 'mehr verbraucht' : 'weniger verbraucht'}</span>
+        ${e.kind === 'weniger' ? '<span class="pill weniger">Einnahme</span>' : ''}
       </div>
     </li>`).join('');
   $$('#entryList li[data-id]').forEach((li) => li.addEventListener('click', () =>
     openEntryDialog(entries.find((e) => e.id === Number(li.dataset.id)))));
 }
 $('#addEntry').addEventListener('click', () => openEntryDialog({ kind: 'mehr' }));
+
+// ---------- Ausgaben: Auswertung ----------
+const shortMonth = (m) => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('de-DE', { month: 'short' }); };
+async function renderStats() {
+  const st = await api('GET', `/api/stats?month=${state.month}`);
+  const s = st.summary;
+  const delta = st.avgSpent != null ? s.spent - st.avgSpent : null;
+  $('#statsKpis').innerHTML = `
+    <div><small>Variable Ausgaben</small><strong class="num">${fmt(s.spent)}</strong>
+      <span class="delta">${delta == null ? 'noch kein Vergleich' : `${delta > 0 ? '▲' : '▼'} ${fmt(Math.abs(delta))} ggü. Ø ${fmt(st.avgSpent)}`}</span></div>
+    <div><small>Käufe</small><strong class="num">${st.count}</strong><span class="delta">Ø ${fmt(st.avgPurchase)} pro Kauf</span></div>
+    <div><small>Sparquote</small><strong class="num ${st.savingsRate < 0 ? 'neg' : ''}">${st.savingsRate == null ? '–' : st.savingsRate + ' %'}</strong>
+      <span class="delta">${fmt(s.available)} übrig</span></div>`;
+
+  const ICON = { warn: '⚠️', idea: '💡', good: '✅' };
+  $('#potential').textContent = st.potential > 0 ? `bis ${fmt(st.potential)}/Monat` : '';
+  $('#tips').innerHTML = st.tips.length ? st.tips.map((t) => `
+    <li><span class="ico" aria-hidden="true">${ICON[t.type]}</span><div><b>${esc(t.title)}</b><span class="t">${esc(t.text)}</span></div></li>`).join('')
+    : '<li><span class="ico">ℹ️</span><div><b>Noch zu wenig Daten</b><span class="t">Trag ein paar Ausgaben mit Händler ein – dann zeigt dir die App, wo du sparen kannst.</span></div></li>';
+
+  const maxShop = Math.max(1, ...st.byShop.map((x) => x.total));
+  $('#shopBars').innerHTML = st.byShop.length ? st.byShop.map((x) => `
+    <div class="hbar" title="${esc(x.name)}: ${fmt(x.total)} bei ${x.count} Käufen">
+      <div class="top"><span>${esc(x.name)}</span><strong class="num">${fmt(x.total)}</strong></div>
+      <div class="track"><i style="width:${(x.total / maxShop) * 100}%"></i></div>
+      <div class="sub">${x.count} Kauf${x.count === 1 ? '' : 'e'} · ${Math.round((x.total / s.spent) * 100)} % deiner Ausgaben</div>
+    </div>`).join('') : '<p class="muted small empty">Keine Ausgaben in diesem Monat.</p>';
+
+  const cats = s.categories.filter((c) => c.budget > 0 || c.spent > 0);
+  $('#budgetBars').innerHTML = cats.length ? cats.map((c) => {
+    const scale = Math.max(c.budget, c.spent, 1);
+    const within = Math.min(c.spent, c.budget || c.spent);
+    const over = c.budget ? Math.max(0, c.spent - c.budget) : 0;
+    const status = !c.budget ? 'kein Budget festgelegt'
+      : over ? `⚠ ${fmt(over)} über Budget` : `noch ${fmt(c.budget - c.spent)} übrig`;
+    return `<div class="hbar" title="${esc(c.name)}: ${fmt(c.spent)} ausgegeben${c.budget ? ` von ${fmt(c.budget)}` : ''}">
+      <div class="top"><span>${esc(c.name)}</span><strong class="num">${fmt(c.spent)}${c.budget ? ` <span class="muted" style="font-weight:400">/ ${fmt(c.budget)}</span>` : ''}</strong></div>
+      <div class="track">
+        <i class="${over ? 'under' : ''}" style="width:${(within / scale) * 100}%"></i>
+        ${over ? `<i class="over" style="width:${(over / scale) * 100}%"></i>` : ''}
+        ${c.budget && over ? `<span class="limit" style="left:${(c.budget / scale) * 100}%"></span>` : ''}
+      </div>
+      <div class="sub ${over ? 'neg' : ''}">${status}</div>
+    </div>`;
+  }).join('') : '<p class="muted small empty">Keine Daten in diesem Monat.</p>';
+
+  const maxT = Math.max(1, ...st.trend.map((t) => t.spent));
+  $('#trend').setAttribute('aria-label', 'Variable Ausgaben: ' + st.trend.map((t) => `${shortMonth(t.month)} ${fmt(t.spent)}`).join(', '));
+  $('#trend').innerHTML = st.trend.map((t) => `
+    <div class="col ${t.month === state.month ? 'cur' : ''}" title="${monthLabel(t.month)}: ${fmt(t.spent)}">
+      <span class="v">${t.spent ? Math.round(t.spent).toLocaleString('de-DE') + ' €' : ''}</span>
+      <i style="height:${(t.spent / maxT) * 100}%"></i>
+      <span class="m">${shortMonth(t.month)}</span>
+    </div>`).join('');
+  $('#trendTable').innerHTML = `<thead><tr><th>Monat</th><th>Variabel</th><th>Fix</th><th>Übrig</th></tr></thead><tbody>${
+    st.trend.slice().reverse().map((t) => `<tr><td>${monthLabel(t.month)}</td><td class="num">${fmt(t.spent)}</td>
+      <td class="num">${fmt(t.fixedTotal)}</td><td class="num ${t.available < 0 ? 'neg' : ''}">${fmt(t.available)}</td></tr>`).join('')}</tbody>`;
+
+  $('#topList').innerHTML = st.top.length ? st.top.map((e) => `
+    <li><div class="main"><div class="title">${esc(e.shop || e.category)}${e.note ? ` <span class="muted">· ${esc(e.note)}</span>` : ''}</div>
+      <div class="meta">${new Date(e.date + 'T00:00').toLocaleDateString('de-DE')} · ${esc(e.category)}</div></div>
+      <div class="right num">${fmt(e.amount)}</div></li>`).join('') : '<li class="muted small">Keine Ausgaben.</li>';
+}
 
 // ---------- Haushalt ----------
 async function renderHousehold() {
@@ -233,8 +325,9 @@ async function renderHousehold() {
       <strong class="num ${m.available < 0 ? 'neg' : 'pos'}">${fmt(m.available)}</strong></div>
     <dl class="calc small">
       <dt>Einkommen</dt><dd>${fmt(m.income)}</dd>
-      <dt>Fixkosten &amp; Budgets</dt><dd>${fmt(m.fixedTotal)}</dd>
-      <dt>Zusätzlich (netto)</dt><dd>${fmt(m.extraMore - m.extraLess)}</dd>
+      <dt>Fixkosten</dt><dd>${fmt(m.fixedTotal)}</dd>
+      <dt>Variable Ausgaben</dt><dd>${fmt(m.spent)}${m.budgetTotal ? ` <span class="muted">/ ${fmt(m.budgetTotal)} Budget</span>` : ''}</dd>
+      ${m.refunds ? `<dt>Einnahmen / Erstattungen</dt><dd>${fmt(m.refunds)}</dd>` : ''}
     </dl>
   </div>`;
   $('#hhTable').innerHTML =
@@ -313,34 +406,75 @@ function openIncomeDialog(item) {
 }
 
 function openFixedDialog(item) {
+  const kind = item?.kind || 'fix';
   openDialog({
-    title: item ? 'Fixkosten bearbeiten' : 'Fixkosten / Budget hinzufügen',
+    title: item ? 'Bearbeiten' : 'Fixkosten / Budget hinzufügen',
     html: `
+      <fieldset>
+        <legend>Art</legend>
+        <label class="radio"><input type="radio" name="kind" value="fix" ${kind === 'fix' ? 'checked' : ''}> Fixkosten – jeden Monat gleich</label>
+        <label class="radio"><input type="radio" name="kind" value="budget" ${kind === 'budget' ? 'checked' : ''}> Budget – Obergrenze für variable Ausgaben</label>
+      </fieldset>
       <label>Bezeichnung <input name="name" required maxlength="120" value="${esc(item?.name)}" placeholder="z. B. Hausabtrag, Einkaufen, Kfz-Versicherung"></label>
       ${categorySelect(item?.category)}
       <div class="row2">${amountInput(item?.amount)}${intervalSelect(item?.interval)}</div>
       <label>Mein Anteil (%) <input name="share" inputmode="decimal" value="${item?.share ?? 100}"></label>
-      <div class="hint">Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) den Gesamtbetrag eintragen und 50 % wählen.</div>`,
+      <div class="hint">Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) den Gesamtbetrag eintragen und 50 % wählen.
+        Bei einem Budget werden deine Ausgaben derselben Kategorie damit verrechnet.</div>`,
     onSave: (d) => item ? api('PUT', `/api/fixed/${item.id}`, d) : api('POST', '/api/fixed', d),
     onDelete: item && (() => api('DELETE', `/api/fixed/${item.id}`)),
   });
 }
 
+// Händler-Vorschläge: bekannte Plattformen + bisher genutzte, mit passender Kategorie
+const SHOP_DEFAULTS = {
+  'PayPal': 'Sonstiges', 'Vinted': 'Kleidung & Shopping', 'eBay': 'Sonstiges', 'Kleinanzeigen': 'Sonstiges',
+  'Amazon': 'Sonstiges', 'Zalando': 'Kleidung & Shopping', 'Temu': 'Kleidung & Shopping', 'Shein': 'Kleidung & Shopping',
+  'Lidl': 'Einkaufen & Lebensmittel', 'Aldi': 'Einkaufen & Lebensmittel', 'Rewe': 'Einkaufen & Lebensmittel',
+  'Edeka': 'Einkaufen & Lebensmittel', 'Kaufland': 'Einkaufen & Lebensmittel', 'Netto': 'Einkaufen & Lebensmittel',
+  'Penny': 'Einkaufen & Lebensmittel', 'dm': 'Drogerie & Haushalt', 'Rossmann': 'Drogerie & Haushalt',
+  'Tankstelle': 'Auto & Verschleiß', 'Werkstatt': 'Auto & Verschleiß', 'Lieferando': 'Essen gehen & Lieferdienste',
+  'Restaurant': 'Essen gehen & Lieferdienste', 'Apotheke': 'Gesundheit', 'Bargeld': 'Sonstiges',
+};
+let shopCache = null;
+async function loadShops() {
+  const used = await api('GET', '/api/shops').catch(() => []);
+  const map = new Map(Object.entries(SHOP_DEFAULTS).map(([k, v]) => [k.toLowerCase(), { shop: k, category: v, count: 0 }]));
+  for (const u of used) map.set(u.shop.toLowerCase(), u);
+  shopCache = [...map.values()].sort((a, b) => b.count - a.count || a.shop.localeCompare(b.shop, 'de'));
+  $('#shopList').innerHTML = shopCache.map((x) => `<option value="${esc(x.shop)}">`).join('');
+}
+
 function openEntryDialog(item = {}) {
   const isEdit = !!item.id;
   const kind = item.kind || 'mehr';
+  loadShops();
   openDialog({
-    title: isEdit ? 'Buchung bearbeiten' : (kind === 'mehr' ? 'Mehr verbraucht' : 'Weniger verbraucht'),
+    title: isEdit ? 'Eintrag bearbeiten' : (kind === 'mehr' ? 'Neue Ausgabe' : 'Einnahme / Erstattung'),
     html: `
       <fieldset>
         <legend>Art</legend>
-        <label class="radio"><input type="radio" name="kind" value="mehr" ${kind === 'mehr' ? 'checked' : ''}> Mehr verbraucht (zusätzliche Ausgabe)</label>
-        <label class="radio"><input type="radio" name="kind" value="weniger" ${kind === 'weniger' ? 'checked' : ''}> Weniger verbraucht / Extra-Einnahme</label>
+        <label class="radio"><input type="radio" name="kind" value="mehr" ${kind === 'mehr' ? 'checked' : ''}> Ausgabe</label>
+        <label class="radio"><input type="radio" name="kind" value="weniger" ${kind === 'weniger' ? 'checked' : ''}> Einnahme / Erstattung (z. B. Verkauf, Rücksendung)</label>
       </fieldset>
-      ${amountInput(item.amount)}
-      ${categorySelect(item.category || 'Einkaufen & Lebensmittel')}
-      <label>Datum <input type="date" name="date" required value="${item.date || todayInMonth(state.month)}"></label>
-      <label>Notiz <input name="note" maxlength="200" value="${esc(item.note)}" placeholder="z. B. Reifenwechsel, Geburtstagsgeschenk"></label>`,
+      <div class="row2">
+        ${amountInput(item.amount)}
+        <label>Datum <input type="date" name="date" required value="${item.date || todayInMonth(state.month)}"></label>
+      </div>
+      <label>Wo? (Händler / Plattform) <input name="shop" list="shopList" maxlength="60" autocomplete="off" value="${esc(item.shop)}" placeholder="z. B. PayPal, Vinted, eBay, Lidl"></label>
+      ${categorySelect(item.category || 'Sonstiges')}
+      <label>Notiz <input name="note" maxlength="200" value="${esc(item.note)}" placeholder="z. B. Winterjacke, Reifenwechsel"></label>`,
+    onOpen: (body) => {
+      const shop = $('[name=shop]', body);
+      const sel = $('[name=category]', body);
+      let touched = isEdit;
+      sel.addEventListener('change', () => { touched = true; });
+      shop.addEventListener('input', () => {
+        if (touched || !shopCache) return;
+        const hit = shopCache.find((x) => x.shop.toLowerCase() === shop.value.trim().toLowerCase());
+        if (hit?.category) sel.value = hit.category;
+      });
+    },
     onSave: (d) => isEdit ? api('PUT', `/api/entries/${item.id}`, d) : api('POST', '/api/entries', d),
     onDelete: isEdit && (() => api('DELETE', `/api/entries/${item.id}`)),
   });
@@ -480,7 +614,7 @@ function openPaymentDialog(debt) {
       </div>
       <label>Notiz <input name="note" maxlength="200" placeholder="optional"></label>
       <label class="check"><input type="checkbox" name="book" ${isDebt && debt.in_budget ? '' : 'checked'}>
-        ${isDebt ? 'Als „Mehr verbraucht“ in diesem Monat buchen' : 'Als „Weniger verbraucht“ (Einnahme) in diesem Monat buchen'}</label>
+        ${isDebt ? 'Als Ausgabe in diesem Monat buchen' : 'Als Einnahme in diesem Monat buchen'}</label>
       ${isDebt ? `<div class="hint">${debt.in_budget ? 'Die Rate zählt schon bei den Fixkosten – nur für Sonderzahlungen anhaken.' : 'Nicht anhaken, wenn diese Rate schon in deinen Fixkosten steckt.'}</div>` : ''}`,
     onSave: (d) => api('POST', `/api/debts/${debt.id}/payments`, d),
   });
@@ -540,7 +674,7 @@ function openBirthdayDialog(item) {
       <label>Status <select name="status">${Object.entries(GIFT_STATUS).map(([k, l]) =>
         `<option value="${k}" ${(g.status || 'offen') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       ${g.entry_id ? '<div class="hint">✓ Bereits als Ausgabe gebucht – Preisänderungen werden übernommen.</div>'
-        : '<label class="check"><input type="checkbox" name="book" checked> Wenn gekauft: Preis als „Mehr verbraucht“ (Geschenke) buchen</label>'}
+        : '<label class="check"><input type="checkbox" name="book" checked> Wenn gekauft: Preis als Ausgabe (Geschenke) buchen</label>'}
       <label>Notiz <input name="note" maxlength="300" value="${esc(item?.note)}" placeholder="z. B. Kleidergröße, Hobbys"></label>
       ${past.length ? `<div class="subhead">Frühere Geschenke</div><ul class="history">${past.map((x) =>
         `<li><span>${x.year}: ${esc(x.idea || '–')}</span><span class="num">${x.price ? fmt(x.price) : ''}</span></li>`).join('')}</ul>` : ''}`,

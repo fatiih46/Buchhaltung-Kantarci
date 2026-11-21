@@ -110,9 +110,15 @@ CREATE TABLE IF NOT EXISTS gifts (
 );
 `);
 
+// Spalten nachrüsten, falls die Datenbank aus einer älteren Version stammt
+const hasColumn = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
+if (!hasColumn('fixed_costs', 'kind')) db.exec("ALTER TABLE fixed_costs ADD COLUMN kind TEXT NOT NULL DEFAULT 'fix'");
+if (!hasColumn('entries', 'shop')) db.exec("ALTER TABLE entries ADD COLUMN shop TEXT NOT NULL DEFAULT ''");
+
 const CATEGORIES = [
   'Haus & Wohnen', 'Kredit / Abtrag', 'Nebenkosten & Energie', 'Einkaufen & Lebensmittel',
   'Auto & Verschleiß', 'Versicherungen', 'Urlaub', 'Handy, Internet & Abos',
+  'Kleidung & Shopping', 'Drogerie & Haushalt', 'Essen gehen & Lieferdienste',
   'Kinder', 'Gesundheit', 'Freizeit', 'Geschenke', 'Schulden & Raten', 'Geliehenes / Rückzahlungen',
   'Sparen & Rücklagen', 'Sonstiges',
 ];
@@ -266,9 +272,9 @@ function birthdaysFor(userId) {
   }).sort((a, b) => a.daysUntil - b.daysUntil || a.name.localeCompare(b.name, 'de'));
 }
 
-function bookEntry(userId, { date, kind, category, amount, note }) {
-  return Number(db.prepare('INSERT INTO entries (user_id, date, kind, category, amount, note) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(userId, date, kind, category, amount, note.slice(0, 200)).lastInsertRowid);
+function bookEntry(userId, { date, kind, category, amount, note, shop = '' }) {
+  return Number(db.prepare('INSERT INTO entries (user_id, date, kind, category, amount, note, shop) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(userId, date, kind, category, amount, note.slice(0, 200), shop.slice(0, 60)).lastInsertRowid);
 }
 
 // ---------- Berechnungen ----------
@@ -278,46 +284,150 @@ function summaryFor(userId, month) {
   const entries = db.prepare("SELECT * FROM entries WHERE user_id = ? AND substr(date, 1, 7) = ?").all(userId, month);
 
   const income = round2(incomes.reduce((s, i) => s + i.amount / i.interval, 0));
-  const byCategory = {};
-  let fixedTotal = 0;
+  const cats = {};
+  const cat = (name) => (cats[name] ||= { fixed: 0, budget: 0, spent: 0, refund: 0, count: 0 });
   for (const f of fixed) {
     const monthly = (f.amount / f.interval) * (f.share / 100);
-    fixedTotal += monthly;
-    byCategory[f.category] = byCategory[f.category] || { planned: 0, extra: 0 };
-    byCategory[f.category].planned += monthly;
+    if (f.kind === 'budget') cat(f.category).budget += monthly; else cat(f.category).fixed += monthly;
   }
   // Raten von Schulden, die "bei Fixkosten mitzählen" sollen (solange noch etwas offen ist)
   const debts = debtsFor(userId);
   for (const d of debts) {
     if (d.direction !== 'schuld' || !d.in_budget || d.monthly_rate <= 0 || d.remaining <= 0) continue;
     if (d.start_date && d.start_date.slice(0, 7) > month) continue;
-    const rate = Math.min(d.monthly_rate, d.remaining);
-    fixedTotal += rate;
-    byCategory['Schulden & Raten'] = byCategory['Schulden & Raten'] || { planned: 0, extra: 0 };
-    byCategory['Schulden & Raten'].planned += rate;
+    cat('Schulden & Raten').fixed += Math.min(d.monthly_rate, d.remaining);
   }
-  let extraMore = 0, extraLess = 0;
   for (const e of entries) {
-    const sign = e.kind === 'mehr' ? 1 : -1;
-    if (sign > 0) extraMore += e.amount; else extraLess += e.amount;
-    byCategory[e.category] = byCategory[e.category] || { planned: 0, extra: 0 };
-    byCategory[e.category].extra += sign * e.amount;
+    const c = cat(e.category);
+    if (e.kind === 'mehr') { c.spent += e.amount; c.count++; } else c.refund += e.amount;
   }
-  const categories = Object.entries(byCategory)
-    .map(([name, v]) => ({ name, planned: round2(v.planned), extra: round2(v.extra), total: round2(v.planned + v.extra) }))
-    .sort((a, b) => b.total - a.total);
+
+  let fixedTotal = 0, budgetTotal = 0, spent = 0, refunds = 0, variableCost = 0, budgetLeft = 0, overBudget = 0;
+  const categories = Object.entries(cats).map(([name, c]) => {
+    // Ausgaben verbrauchen zuerst das Budget der Kategorie; erst darüber hinaus kostet es extra.
+    const variable = Math.max(c.budget, c.spent);
+    fixedTotal += c.fixed; budgetTotal += c.budget; spent += c.spent; refunds += c.refund; variableCost += variable;
+    if (c.budget > 0) { budgetLeft += Math.max(0, c.budget - c.spent); overBudget += Math.max(0, c.spent - c.budget); }
+    return { name, fixed: round2(c.fixed), budget: round2(c.budget), spent: round2(c.spent), refund: round2(c.refund),
+      count: c.count, total: round2(c.fixed + variable) };
+  }).filter((c) => c.total > 0 || c.refund > 0).sort((a, b) => b.total - a.total);
 
   fixedTotal = round2(fixedTotal);
-  const available = round2(income - fixedTotal - extraMore + extraLess);
+  const available = round2(income - fixedTotal - variableCost + refunds);
   return {
     month, income, fixedTotal,
-    extraMore: round2(extraMore), extraLess: round2(extraLess),
-    plannedAvailable: round2(income - fixedTotal),
+    budgetTotal: round2(budgetTotal), spent: round2(spent), budgetLeft: round2(budgetLeft), overBudget: round2(overBudget),
+    refunds: round2(refunds),
+    plannedAvailable: round2(income - fixedTotal - budgetTotal),
     available, categories,
     debtsOpen: round2(debts.filter((d) => d.direction === 'schuld').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
     receivablesOpen: round2(debts.filter((d) => d.direction === 'forderung').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
     upcomingBirthdays: birthdaysFor(userId).filter((b) => b.daysUntil <= 30).slice(0, 5)
       .map((b) => ({ name: b.name, nextDate: b.nextDate, daysUntil: b.daysUntil, turns: b.turns, gift: b.gift })),
+  };
+}
+
+// ---------- Auswertung & Sparpotenzial ----------
+const shopKey = (e) => e.shop || `${e.category} (ohne Händler)`;
+function statsFor(userId, month) {
+  const cur = summaryFor(userId, month);
+  const entries = db.prepare("SELECT * FROM entries WHERE user_id = ? AND kind = 'mehr' AND substr(date, 1, 7) = ?").all(userId, month);
+
+  const group = (list, key) => {
+    const m = {};
+    for (const e of list) { const k = key(e); (m[k] ||= { name: k, total: 0, count: 0 }); m[k].total += e.amount; m[k].count++; }
+    return Object.values(m).map((x) => ({ ...x, total: round2(x.total) })).sort((a, b) => b.total - a.total);
+  };
+  const byShop = group(entries, shopKey);
+
+  // Verlauf: die letzten 6 Monate inkl. aktuellem
+  const [y, mo] = month.split('-').map(Number);
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(y, mo - 1 - i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  const trend = months.map((m) => {
+    const s = m === month ? cur : summaryFor(userId, m);
+    return { month: m, spent: s.spent, fixedTotal: s.fixedTotal, income: s.income, available: s.available };
+  });
+
+  // Durchschnitt der 3 Vormonate, nur Monate mit erfassten Ausgaben
+  const prevMonths = months.slice(2, 5);
+  const prevEntries = db.prepare(`SELECT * FROM entries WHERE user_id = ? AND kind = 'mehr'
+    AND substr(date, 1, 7) IN (${prevMonths.map(() => '?').join(',')})`).all(userId, ...prevMonths);
+  const activeMonths = new Set(prevEntries.map((e) => e.date.slice(0, 7))).size;
+  const avg = (list) => activeMonths ? round2(list.reduce((s, e) => s + e.amount, 0) / activeMonths) : null;
+  const avgSpent = avg(prevEntries);
+  const avgBy = (key) => {
+    const m = {};
+    for (const e of prevEntries) { const k = key(e); m[k] = (m[k] || 0) + e.amount; }
+    for (const k in m) m[k] = round2(m[k] / activeMonths);
+    return m;
+  };
+  const avgShop = activeMonths ? avgBy(shopKey) : {};
+  const avgCat = activeMonths ? avgBy((e) => e.category) : {};
+
+  const small = entries.filter((e) => e.amount < 20);
+  const top = [...entries].sort((a, b) => b.amount - a.amount).slice(0, 5)
+    .map((e) => ({ date: e.date, shop: e.shop, category: e.category, amount: e.amount, note: e.note }));
+
+  // Sparpotenzial
+  const tips = [];
+  const fmt = (n) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
+  for (const c of cur.categories) {
+    if (c.budget > 0 && c.spent > c.budget)
+      tips.push({ type: 'warn', title: `${c.name}: ${fmt(c.spent - c.budget)} über Budget`,
+        text: `Budget ${fmt(c.budget)}, ausgegeben ${fmt(c.spent)}.`, amount: round2(c.spent - c.budget) });
+  }
+  const flaggedShops = new Set();
+  for (const s of byShop) {
+    const a = avgShop[s.name];
+    if (a && s.total > a * 1.2 && s.total - a >= 15) {
+      flaggedShops.add(s.name);
+      tips.push({ type: 'warn', title: `${s.name}: ${fmt(s.total - a)} mehr als üblich`,
+        text: `Diesen Monat ${fmt(s.total)}, sonst im Schnitt ${fmt(a)}.`, amount: round2(s.total - a) });
+    }
+  }
+  for (const c of cur.categories) {
+    const a = avgCat[c.name];
+    // nicht doppelt melden, wenn ein Händler dieser Kategorie schon auffällt
+    const covered = entries.some((e) => e.category === c.name && flaggedShops.has(shopKey(e)));
+    if (!c.budget && !covered && a && c.spent > a * 1.2 && c.spent - a >= 15)
+      tips.push({ type: 'warn', title: `${c.name}: ${fmt(c.spent - a)} mehr als üblich`,
+        text: `Diesen Monat ${fmt(c.spent)}, sonst im Schnitt ${fmt(a)}.`, amount: round2(c.spent - a) });
+  }
+  // Händler, deren Käufe komplett in Budget-Kategorien unterhalb des Budgets liegen, brauchen keinen Spartipp
+  const withinBudget = (shop) => entries.filter((e) => shopKey(e) === shop).every((e) => {
+    const c = cur.categories.find((x) => x.name === e.category);
+    return c && c.budget > 0 && c.spent <= c.budget;
+  });
+  const topShop = byShop.find((s) => !s.name.endsWith('(ohne Händler)') && !flaggedShops.has(s.name) && !withinBudget(s.name));
+  if (topShop && topShop.total >= 30) {
+    const save = round2(topShop.total * 0.25);
+    tips.push({ type: 'idea', title: `Bei ${topShop.name} 25 % weniger = ${fmt(save * 12)} im Jahr`,
+      text: `Dort hast du diesen Monat viel ausgegeben (${fmt(topShop.total)} bei ${topShop.count} Kauf${topShop.count === 1 ? '' : 'en'}). Ein Viertel weniger spart ${fmt(save)} pro Monat.`,
+      amount: save });
+  }
+  if (small.length >= 5) {
+    const sum = round2(small.reduce((s, e) => s + e.amount, 0));
+    tips.push({ type: 'idea', title: `${small.length} Kleinkäufe unter 20 € = ${fmt(sum)}`,
+      text: `Kleine Beträge summieren sich – aufs Jahr gerechnet ca. ${fmt(sum * 12)}.`, amount: round2(sum / 2) });
+  }
+  if (cur.budgetLeft > 0)
+    tips.push({ type: 'good', title: `${fmt(cur.budgetLeft)} Budget noch nicht verbraucht`,
+      text: 'Was davon am Monatsende übrig bleibt, kannst du direkt zur Seite legen.', amount: 0 });
+  if (cur.income > 0 && cur.available > 0)
+    tips.push({ type: 'good', title: `${fmt(cur.available)} bleiben dir diesen Monat`,
+      text: `Das ist eine Sparquote von ${Math.round((cur.available / cur.income) * 100)} %. Legst du das jeden Monat zurück, sind es ${fmt(cur.available * 12)} im Jahr.`, amount: 0 });
+  const potential = round2(tips.reduce((s, t) => s + (t.amount || 0), 0));
+
+  return {
+    month, summary: cur, byShop, trend, avgSpent, activeMonths,
+    count: entries.length, avgPurchase: entries.length ? round2(cur.spent / entries.length) : 0,
+    smallCount: small.length, smallTotal: round2(small.reduce((s, e) => s + e.amount, 0)),
+    top, tips, potential,
+    savingsRate: cur.income > 0 ? Math.round((cur.available / cur.income) * 100) : null,
   };
 }
 
@@ -408,17 +518,18 @@ route('DELETE', '/api/incomes/:id', ({ user, params }) => {
 });
 
 // Fixkosten / Budgets
+const fixedKind = (v) => (v === 'budget' ? 'budget' : 'fix');
 route('GET', '/api/fixed', ({ user }) => db.prepare('SELECT * FROM fixed_costs WHERE user_id = ? ORDER BY category, name').all(user.id));
 route('POST', '/api/fixed', ({ user, body }) => {
-  db.prepare('INSERT INTO fixed_costs (user_id, name, category, amount, interval, share) VALUES (?, ?, ?, ?, ?, ?)')
+  db.prepare('INSERT INTO fixed_costs (user_id, name, category, amount, interval, share, kind) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(user.id, str(body.name, 'Bezeichnung'), category(body.category), num(body.amount, 'Betrag'),
-      interval(body.interval), num(body.share ?? 100, 'Anteil', { min: 1, max: 100 }));
+      interval(body.interval), num(body.share ?? 100, 'Anteil', { min: 1, max: 100 }), fixedKind(body.kind));
   return { ok: true };
 });
 route('PUT', '/api/fixed/:id', ({ user, body, params }) => {
-  const r = db.prepare('UPDATE fixed_costs SET name = ?, category = ?, amount = ?, interval = ?, share = ? WHERE id = ? AND user_id = ?')
+  const r = db.prepare('UPDATE fixed_costs SET name = ?, category = ?, amount = ?, interval = ?, share = ?, kind = ? WHERE id = ? AND user_id = ?')
     .run(str(body.name, 'Bezeichnung'), category(body.category), num(body.amount, 'Betrag'),
-      interval(body.interval), num(body.share ?? 100, 'Anteil', { min: 1, max: 100 }), params.id, user.id);
+      interval(body.interval), num(body.share ?? 100, 'Anteil', { min: 1, max: 100 }), fixedKind(body.kind), params.id, user.id);
   if (!r.changes) throw new HttpError(404, 'Nicht gefunden.');
   return { ok: true };
 });
@@ -427,22 +538,31 @@ route('DELETE', '/api/fixed/:id', ({ user, params }) => {
   return { ok: true };
 });
 
-// Zusätzliche Buchungen (mehr / weniger verbraucht)
+// Variable Ausgaben & Einnahmen/Erstattungen
+function normShop(userId, v) {
+  if (typeof v !== 'string' || !v.trim()) return '';
+  const shop = v.trim().replace(/\s+/g, ' ').slice(0, 60);
+  // gleiche Schreibweise wie bei früheren Einträgen verwenden ("vinted" -> "Vinted")
+  const known = db.prepare("SELECT shop FROM entries WHERE user_id = ? AND lower(shop) = lower(?) AND shop <> '' LIMIT 1").get(userId, shop);
+  return known ? known.shop : shop;
+}
+function entryFields(userId, body) {
+  return [
+    dateStr(body.date), body.kind === 'weniger' ? 'weniger' : 'mehr', category(body.category), num(body.amount, 'Betrag', { min: 0.01 }),
+    typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '', normShop(userId, body.shop),
+  ];
+}
 route('GET', '/api/entries', ({ user, query }) =>
   db.prepare("SELECT * FROM entries WHERE user_id = ? AND substr(date, 1, 7) = ? ORDER BY date DESC, id DESC")
     .all(user.id, monthStr(query.get('month'))));
 route('POST', '/api/entries', ({ user, body }) => {
-  const kind = body.kind === 'weniger' ? 'weniger' : 'mehr';
-  db.prepare('INSERT INTO entries (user_id, date, kind, category, amount, note) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(user.id, dateStr(body.date), kind, category(body.category), num(body.amount, 'Betrag'),
-      typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '');
+  db.prepare('INSERT INTO entries (date, kind, category, amount, note, shop, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(...entryFields(user.id, body), user.id);
   return { ok: true };
 });
 route('PUT', '/api/entries/:id', ({ user, body, params }) => {
-  const kind = body.kind === 'weniger' ? 'weniger' : 'mehr';
-  const r = db.prepare('UPDATE entries SET date = ?, kind = ?, category = ?, amount = ?, note = ? WHERE id = ? AND user_id = ?')
-    .run(dateStr(body.date), kind, category(body.category), num(body.amount, 'Betrag'),
-      typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '', params.id, user.id);
+  const r = db.prepare('UPDATE entries SET date = ?, kind = ?, category = ?, amount = ?, note = ?, shop = ? WHERE id = ? AND user_id = ?')
+    .run(...entryFields(user.id, body), params.id, user.id);
   if (!r.changes) throw new HttpError(404, 'Nicht gefunden.');
   return { ok: true };
 });
@@ -450,6 +570,12 @@ route('DELETE', '/api/entries/:id', ({ user, params }) => {
   db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(params.id, user.id);
   return { ok: true };
 });
+// Bisher genutzte Händler mit zuletzt verwendeter Kategorie (für Vorschläge im Formular)
+route('GET', '/api/shops', ({ user }) =>
+  db.prepare(`SELECT shop, COUNT(*) AS count,
+      (SELECT e2.category FROM entries e2 WHERE e2.user_id = e.user_id AND e2.shop = e.shop ORDER BY e2.date DESC, e2.id DESC LIMIT 1) AS category
+    FROM entries e WHERE user_id = ? AND shop <> '' GROUP BY shop ORDER BY count DESC LIMIT 50`).all(user.id));
+route('GET', '/api/stats', ({ user, query }) => statsFor(user.id, monthStr(query.get('month'))));
 
 // Übersichten
 route('GET', '/api/summary', ({ user, query }) => summaryFor(user.id, monthStr(query.get('month'))));
@@ -459,11 +585,11 @@ route('GET', '/api/household', ({ user, query }) => {
   const list = members.map((m) => {
     const s = summaryFor(m.id, month);
     return { id: m.id, name: m.name, isMe: m.id === user.id, income: s.income, fixedTotal: s.fixedTotal,
-      extraMore: s.extraMore, extraLess: s.extraLess, available: s.available };
+      budgetTotal: s.budgetTotal, spent: s.spent, refunds: s.refunds, available: s.available };
   });
   const sum = (k) => round2(list.reduce((s, m) => s + m[k], 0));
   return { month, members: list, total: { income: sum('income'), fixedTotal: sum('fixedTotal'),
-    extraMore: sum('extraMore'), extraLess: sum('extraLess'), available: sum('available') } };
+    budgetTotal: sum('budgetTotal'), spent: sum('spent'), refunds: sum('refunds'), available: sum('available') } };
 });
 
 // Schulden & Forderungen
@@ -514,7 +640,7 @@ route('POST', '/api/debts/:id/payments', ({ user, body, params }) => {
   if (body.book === true || body.book === 'on') {
     const isDebt = d.direction === 'schuld';
     entryId = bookEntry(user.id, {
-      date, amount,
+      date, amount, shop: d.person,
       kind: isDebt ? 'mehr' : 'weniger',
       category: isDebt ? 'Schulden & Raten' : 'Geliehenes / Rückzahlungen',
       note: `${isDebt ? 'Rückzahlung an' : 'Rückzahlung von'} ${d.person}${note ? ' – ' + note : ''}`,
@@ -595,13 +721,13 @@ route('PUT', '/api/birthdays/:id/gift', ({ user, body, params }) => {
 // CSV-Export der eigenen Buchungen
 route('GET', '/api/export.csv', ({ user, res }) => {
   const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = [['Typ', 'Bezeichnung/Notiz', 'Kategorie', 'Betrag', 'Intervall (Monate)', 'Anteil %', 'Datum']];
+  const rows = [['Typ', 'Bezeichnung/Notiz', 'Kategorie', 'Betrag', 'Intervall (Monate)', 'Anteil %', 'Datum', 'Händler']];
   for (const i of db.prepare('SELECT * FROM incomes WHERE user_id = ?').all(user.id))
     rows.push(['Einkommen', i.name, '', i.amount, i.interval, '', '']);
   for (const f of db.prepare('SELECT * FROM fixed_costs WHERE user_id = ?').all(user.id))
-    rows.push(['Fixkosten', f.name, f.category, f.amount, f.interval, f.share, '']);
+    rows.push([f.kind === 'budget' ? 'Budget' : 'Fixkosten', f.name, f.category, f.amount, f.interval, f.share, '', '']);
   for (const e of db.prepare('SELECT * FROM entries WHERE user_id = ? ORDER BY date').all(user.id))
-    rows.push([e.kind === 'mehr' ? 'Mehr verbraucht' : 'Weniger verbraucht', e.note, e.category, e.amount, '', '', e.date]);
+    rows.push([e.kind === 'mehr' ? 'Ausgabe' : 'Einnahme/Erstattung', e.note, e.category, e.amount, '', '', e.date, e.shop]);
   rows.push([], ['Typ', 'Person', 'Bezeichnung', 'Betrag', 'Bezahlt', 'Offen', 'Rate/Monat', 'Fällig']);
   for (const d of debtsFor(user.id))
     rows.push([d.direction === 'schuld' ? 'Schuld' : 'Forderung', d.person, d.title, d.amount, d.paid, d.remaining, d.monthly_rate, d.due_date || '']);

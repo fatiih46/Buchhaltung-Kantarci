@@ -72,18 +72,12 @@
 
         <div class="card">
           <h2>Rechnung für den Monat</h2>
-          <dl class="calc">
-            <dt>Einkommen</dt><dd id="sIncome"></dd>
-            <dt>− Fixkosten &amp; Budgets</dt><dd id="sFixed"></dd>
-            <dt>− Mehr verbraucht</dt><dd id="sMore"></dd>
-            <dt>+ Weniger verbraucht</dt><dd id="sLess"></dd>
-            <dt class="total">= Verfügbar</dt><dd class="total" id="sAvail"></dd>
-          </dl>
+          <dl class="calc" id="calc"></dl>
         </div>
 
         <div class="quick">
-          <button type="button" class="btn danger-soft" data-quick="mehr">＋ Mehr verbraucht</button>
-          <button type="button" class="btn ok-soft" data-quick="weniger">− Weniger verbraucht</button>
+          <button type="button" class="btn danger-soft" data-quick="mehr">＋ Ausgabe</button>
+          <button type="button" class="btn ok-soft" data-quick="weniger">＋ Einnahme / Erstattung</button>
         </div>
 
         <div class="card" id="listsTeaser" hidden>
@@ -118,22 +112,53 @@
             <h2>Fixkosten &amp; Budgets</h2>
             <button type="button" class="btn small" id="addFixed">＋ Hinzufügen</button>
           </div>
-          <p class="muted small">Alles, was regelmäßig anfällt: Hausabtrag, Versicherungen, Einkaufen, Auto-Verschleiß, Urlaub … Jährliche Beträge werden automatisch auf den Monat umgerechnet.</p>
+          <p class="muted small"><strong>Fixkosten</strong> bleiben jeden Monat gleich (Hausabtrag, Versicherungen, Abos …). Ein <strong>Budget</strong> ist deine Obergrenze für variable Ausgaben (z. B. Einkaufen 450 €) – deine eingetragenen Ausgaben werden damit verrechnet. Jährliche Beträge werden auf den Monat umgerechnet.</p>
           <div id="fixedList"></div>
           <div class="list-total"><span>Pro Monat (dein Anteil)</span><strong id="fixedTotal"></strong></div>
         </div>
       </section>
 
-      <!-- Buchungen -->
+      <!-- Ausgaben: Liste + Auswertung -->
       <section data-view="entries" hidden>
-        <div class="card">
-          <div class="card-head">
-            <h2>Zusätzliche Buchungen</h2>
-            <button type="button" class="btn small" id="addEntry">＋ Neu</button>
+        <div class="seg seg2" role="tablist">
+          <button type="button" data-sub="list" class="active">Liste</button>
+          <button type="button" data-sub="stats">Auswertung</button>
+        </div>
+        <div data-subview="list" class="stack">
+          <div class="card">
+            <div class="card-head">
+              <h2>Variable Ausgaben</h2>
+              <button type="button" class="btn small" id="addEntry">＋ Ausgabe</button>
+            </div>
+            <p class="muted small">Alles, was du zusätzlich bezahlst – PayPal, Vinted, eBay, Supermarkt, Tanken … Einnahmen und Erstattungen (z. B. Vinted-Verkauf, Rücksendung) erhöhen deinen verfügbaren Betrag.</p>
+            <div id="entrySummary"></div>
+            <ul class="list" id="entryList"></ul>
+            <p class="muted small empty" id="entryEmpty" hidden>Keine Ausgaben in diesem Monat.</p>
           </div>
-          <p class="muted small">„Mehr verbraucht“ verringert, „Weniger verbraucht“ erhöht deinen verfügbaren Betrag in diesem Monat.</p>
-          <ul class="list" id="entryList"></ul>
-          <p class="muted small empty" id="entryEmpty" hidden>Keine Buchungen in diesem Monat.</p>
+        </div>
+        <div data-subview="stats" class="stack" hidden>
+          <div id="statsKpis" class="summary-row kpis"></div>
+          <div class="card">
+            <div class="card-head"><h2>💡 Dein Sparpotenzial</h2><strong id="potential" class="num"></strong></div>
+            <ul class="tips" id="tips"></ul>
+          </div>
+          <div class="card">
+            <h2>Wo hast du ausgegeben?</h2>
+            <div id="shopBars" class="hbars"></div>
+          </div>
+          <div class="card">
+            <h2>Budget vs. Ausgaben</h2>
+            <div id="budgetBars" class="hbars"></div>
+          </div>
+          <div class="card">
+            <h2>Variable Ausgaben – letzte 6 Monate</h2>
+            <div id="trend" class="vbars" role="img"></div>
+            <table class="mini-table" id="trendTable"></table>
+          </div>
+          <div class="card">
+            <h2>Größte Ausgaben</h2>
+            <ul class="list compact" id="topList"></ul>
+          </div>
         </div>
       </section>
 
@@ -195,7 +220,7 @@
     <nav class="tabbar">
       <button type="button" data-tab="overview" class="active"><span>◎</span>Übersicht</button>
       <button type="button" data-tab="plan"><span>☰</span>Plan</button>
-      <button type="button" data-tab="entries"><span>±</span>Buchungen</button>
+      <button type="button" data-tab="entries"><span>€</span>Ausgaben</button>
       <button type="button" data-tab="lists"><span>✎</span>Listen</button>
       <button type="button" data-tab="household"><span>⌂</span>Haushalt</button>
     </nav>
@@ -216,6 +241,7 @@
     </form>
   </dialog>
 
+  <datalist id="shopList"></datalist>
   <div id="toast" class="toast" hidden></div>
   <script src="/app.js"></script>
 </body>

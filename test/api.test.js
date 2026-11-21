@@ -55,8 +55,8 @@ test('zwei Konten in einem Haushalt, getrennte Daten, richtige Berechnung', asyn
   const s = (await fatih('GET', '/api/summary?month=2026-11')).data;
   assert.equal(s.income, 3000);
   assert.equal(s.fixedTotal, 1200.5);
-  assert.equal(s.extraMore, 250);
-  assert.equal(s.extraLess, 50);
+  assert.equal(s.spent, 250);
+  assert.equal(s.refunds, 50);
   assert.equal(s.available, 3000 - 1200.5 - 250 + 50);
 
   // Partnerin sieht Fatihs Daten nicht
@@ -113,12 +113,12 @@ test('Schulden, Forderungen und Geburtstage', async () => {
   await c('POST', `/api/debts/${ford.id}/payments`, { date: today, amount: '50', book: 'on' });
   s = (await c('GET', '/api/summary?month=' + month)).data;
   assert.equal(s.receivablesOpen, 150);
-  assert.equal(s.extraLess, 50);
+  assert.equal(s.refunds, 50);
   // Zahlung löschen entfernt auch die Buchung
   const pay = (await c('GET', '/api/debts')).data.find((d) => d.direction === 'forderung').payments[0];
   await c('DELETE', `/api/payments/${pay.id}`);
   s = (await c('GET', '/api/summary?month=' + month)).data;
-  assert.equal(s.extraLess, 0);
+  assert.equal(s.refunds, 0);
   assert.equal(s.receivablesOpen, 200);
 
   // Andere Person kann nicht auf fremde Schulden buchen
@@ -145,4 +145,51 @@ test('Schulden, Forderungen und Geburtstage', async () => {
   assert.equal(entries[0].amount, 70);
   s = (await c('GET', '/api/summary?month=' + month)).data;
   assert.equal(s.upcomingBirthdays[0].name, 'Mama');
+});
+
+test('Budgets, variable Ausgaben mit Händler und Auswertung', async () => {
+  const c = client();
+  await c('POST', '/api/register', { name: 'Stat', email: 'stat@example.com', password: 'geheim123' });
+  await c('POST', '/api/incomes', { name: 'Gehalt', amount: '3000' });
+  await c('POST', '/api/fixed', { name: 'Miete', category: 'Haus & Wohnen', amount: '1000' });
+  await c('POST', '/api/fixed', { name: 'Einkaufen', category: 'Einkaufen & Lebensmittel', amount: '400', kind: 'budget' });
+
+  // Vormonate: Vinted ~ 40 €
+  for (const m of ['2026-08', '2026-09', '2026-10'])
+    await c('POST', '/api/entries', { date: `${m}-10`, category: 'Kleidung & Shopping', amount: '40', shop: 'Vinted' });
+
+  // November: Einkaufen unter Budget, Vinted deutlich mehr, Kleinkäufe
+  await c('POST', '/api/entries', { date: '2026-11-03', category: 'Einkaufen & Lebensmittel', amount: '150', shop: 'Lidl' });
+  await c('POST', '/api/entries', { date: '2026-11-04', category: 'Kleidung & Shopping', amount: '120', shop: 'vinted' });
+  for (let i = 0; i < 5; i++)
+    await c('POST', '/api/entries', { date: '2026-11-05', category: 'Sonstiges', amount: '10', shop: 'PayPal' });
+
+  let s = (await c('GET', '/api/summary?month=2026-11')).data;
+  assert.equal(s.fixedTotal, 1000);
+  assert.equal(s.budgetTotal, 400);
+  assert.equal(s.spent, 320);
+  assert.equal(s.budgetLeft, 250);
+  // 3000 - 1000 - max(400,150) - 120 - 50
+  assert.equal(s.available, 1430);
+
+  // Budget überschritten -> nur der Überzug kostet extra
+  await c('POST', '/api/entries', { date: '2026-11-20', category: 'Einkaufen & Lebensmittel', amount: '300', shop: 'Rewe' });
+  s = (await c('GET', '/api/summary?month=2026-11')).data;
+  assert.equal(s.overBudget, 50);
+  assert.equal(s.available, 1380);
+
+  const shops = (await c('GET', '/api/shops')).data;
+  assert.ok(shops.find((x) => x.shop === 'Vinted' && x.count === 4), 'Schreibweise wird vereinheitlicht');
+
+  const st = (await c('GET', '/api/stats?month=2026-11')).data;
+  assert.equal(st.byShop[0].name, 'Rewe');
+  assert.equal(st.byShop.find((x) => x.name === 'Vinted').total, 120);
+  assert.equal(st.avgSpent, 40);
+  assert.equal(st.trend.length, 6);
+  assert.equal(st.trend[5].spent, 620);
+  assert.equal(st.smallCount, 5);
+  assert.ok(st.tips.some((t) => t.title.startsWith('Vinted') && t.title.includes('mehr als üblich')));
+  assert.ok(st.tips.some((t) => t.title.includes('über Budget')));
+  assert.ok(st.tips.some((t) => t.title.includes('Kleinkäufe')));
+  assert.ok(st.potential > 0);
 });

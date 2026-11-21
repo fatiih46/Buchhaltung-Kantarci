@@ -5,10 +5,16 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
 - **Eigene Konten** – jede Person meldet sich mit eigener E-Mail und eigenem Passwort an.
 - **Haushalt verbinden** – die erste Person legt den Haushalt an, die zweite tritt mit dem **Einladungscode** (oder dem Einladungslink aus „Haushalt → Kopieren“) bei.
 - **Einkommen** (Gehalt, Kindergeld …) – monatlich, vierteljährlich, halbjährlich oder jährlich.
-- **Fixkosten & Budgets** – Hausabtrag, Versicherungen, Einkaufen, Auto-Verschleiß, Urlaub, Abos …
-  Jahresbeträge werden automatisch auf den Monat umgerechnet. Bei gemeinsamen Kosten
-  (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag und seinen **Anteil in %** an.
-- **Zusätzliche Buchungen** – „Mehr verbraucht“ (z. B. Reparatur) oder „Weniger verbraucht“ / Extra-Einnahme, pro Monat.
+- **Fixkosten** – bleiben jeden Monat gleich: Hausabtrag, Versicherungen, Abos … Jahresbeträge werden automatisch
+  auf den Monat umgerechnet. Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag
+  und seinen **Anteil in %** an.
+- **Budgets** – Obergrenzen für variable Ausgaben (z. B. Einkaufen 450 €). Ausgaben derselben Kategorie werden damit
+  verrechnet: unter Budget = gespart, darüber = kostet extra.
+- **Variable Ausgaben** (Reiter „Ausgaben“) – selbst eintragen mit Betrag, **Händler/Plattform** (PayPal, Vinted, eBay,
+  Amazon, Lidl …, mit Vorschlägen und automatischer Kategorie), Datum und Notiz. Dazu Einnahmen/Erstattungen
+  (z. B. Vinted-Verkauf, Rücksendung).
+- **Auswertung & Sparpotenzial** – pro Monat: Ausgaben nach Händler, Budget vs. Ausgaben, Verlauf der letzten
+  6 Monate, größte Ausgaben, Vergleich mit dem Durchschnitt, Kleinkäufe, Sparquote und konkrete Spartipps.
 - **Listen** (eigener Reiter):
   - **Schulden** – was ich noch zurückzahlen muss (Kredite, Ratenkäufe, geliehenes Geld): Gesamtbetrag,
     monatliche Rate, Fälligkeit, Zahlungen. Offener Betrag und Restlaufzeit werden automatisch berechnet.
