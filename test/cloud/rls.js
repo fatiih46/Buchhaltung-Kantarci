@@ -37,7 +37,8 @@ const assert = require('assert/strict');
   assert.deepEqual((await as(A, `select name from members order by created_at, name`)).map((r) => r.name).sort(), ['Fatih', 'Partnerin']);
   assert.deepEqual((await as(C, `select name from members`)).map((r) => r.name), ['Fremd']);
   assert.equal((await as(C, `select * from households`)).length, 1);
-  assert.equal((await as(null, `select * from members`)).length, 0);
+  await assert.rejects(as(null, `select * from members`), /permission denied/);
+  await assert.rejects(as(null, `select * from user_data`), /permission denied/);
   // Direkt in members schreiben ist verboten (nur über die Funktionen)
   await assert.rejects(as(C, `insert into members values ($1, (select household_id from members where user_id=$2), 'Hacker')`, [C, A]), /row-level security|permission/);
 

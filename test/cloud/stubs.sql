@@ -16,5 +16,5 @@ create function storage.foldername(name text) returns text[] language sql immuta
 grant usage on schema storage to anon, authenticated;
 grant select, insert, delete on storage.objects to authenticated;
 grant usage on schema public to anon, authenticated;
-alter default privileges in schema public grant all on tables to anon, authenticated;
+-- keine automatischen Tabellenrechte (wie neuere Supabase-Projekte): setup.sql muss sie selbst vergeben
 alter default privileges in schema public grant execute on functions to anon, authenticated;

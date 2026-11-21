@@ -42,6 +42,13 @@ alter table public.members enable row level security;
 alter table public.user_data enable row level security;
 alter table public.summaries enable row level security;
 
+-- Zugriffsrechte ausdrücklich vergeben (neuere Supabase-Projekte vergeben sie nicht mehr automatisch).
+-- Welche Zeilen jemand sieht, regeln danach die Zugriffsregeln (Policies) weiter unten.
+revoke all on public.households, public.members, public.user_data, public.summaries from anon;
+grant select on public.households, public.members to authenticated;
+grant select, insert, update, delete on public.user_data to authenticated;
+grant select, insert, update on public.summaries to authenticated;
+
 -- Haushalt der angemeldeten Person (security definer: umgeht RLS, liefert nur die eigene Zeile)
 create or replace function public.my_household()
 returns uuid language sql stable security definer set search_path = public as $$
