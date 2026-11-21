@@ -1,0 +1,12 @@
+{
+  "name": "haushaltsbuch-kantarci",
+  "version": "1.0.0",
+  "description": "Haushaltsbuch für zwei: Fixkosten, Mehrverbrauch und was am Ende übrig bleibt.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "engines": { "node": ">=22.13" }
+}
