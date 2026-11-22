@@ -238,8 +238,25 @@
         <button type="button" class="btn ghost wide" id="logout">Abmelden</button>
       </section>
     </main>
+    <button type="button" id="fab" class="fab" aria-label="Schnell eintragen">＋</button>
 
   </div>
+
+  <!-- Schnell eintragen -->
+  <dialog id="quickDlg" class="sheet" aria-labelledby="quickTitle">
+    <h2 id="quickTitle">Was möchtest du eintragen?</h2>
+    <div class="quick-grid">
+      <button type="button" data-qa="ausgabe"><span>💸</span>Ausgabe</button>
+      <button type="button" data-qa="einnahme"><span>💶</span>Einnahme / Erstattung</button>
+      <button type="button" data-qa="fix"><span>🔁</span>Fixkosten</button>
+      <button type="button" data-qa="einkommen"><span>💼</span>Einkommen</button>
+      <button type="button" data-qa="schuld"><span>📉</span>Schuld</button>
+      <button type="button" data-qa="forderung"><span>📈</span>Bekomme ich zurück</button>
+      <button type="button" data-qa="vermoegen"><span>🥇</span>Vermögen / Gold</button>
+      <button type="button" data-qa="geburtstag"><span>🎂</span>Geburtstag</button>
+    </div>
+    <button type="button" class="btn ghost wide" id="quickClose">Abbrechen</button>
+  </dialog>
 
   <!-- Formular-Dialog -->
   <dialog id="dlg">

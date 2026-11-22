@@ -8,6 +8,9 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
 - **Bedienung** – oben eine Leiste mit allen Bereichen nebeneinander (am Handy wischbar): Übersicht · Kosten ·
   Auswertung · Schulden · Forderungen · Vermögen & Gold · Zekât · Geburtstage · Haushalt. Unter **Kosten** schaltet
   man zwischen **Einkommen | Fixkosten | Variabel** um.
+- **Schnell eintragen und austragen** – das runde **＋** unten rechts öffnet auf jeder Seite ein Menü (Ausgabe,
+  Einnahme, Fixkosten, Einkommen, Schuld, Forderung, Vermögen, Geburtstag). Das **−** an jedem Eintrag löscht ihn –
+  immer erst nach einer Rückfrage.
 - **Fixkosten** – einmal eintragen, zählen automatisch, bis man sie ändert: monatliche jeden Monat; vierteljährliche,
   halbjährliche und jährliche wahlweise mit vollem Betrag im Monat der Fälligkeit (mit Datum) oder auf die Monate verteilt
   (Hausabtrag, Versicherungen, Abos …). Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag

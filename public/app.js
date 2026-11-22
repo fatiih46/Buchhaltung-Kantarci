@@ -189,6 +189,24 @@ async function render() {
   } catch (err) { toast(err.message); }
 }
 
+// ---------- „−“: Eintrag löschen, immer mit Rückfrage ----------
+const delBtn = (url, name, extra = '') =>
+  `<button type="button" class="del-btn" data-del="${url}" data-del-name="${esc(name)}" data-del-extra="${esc(extra)}" aria-label="${esc(name)} löschen" title="Löschen">−</button>`;
+// in der Capture-Phase, damit nicht zusätzlich der Bearbeiten-Dialog der Zeile aufgeht
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-del]');
+  if (!b) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const extra = b.dataset.delExtra ? `\n\n${b.dataset.delExtra}` : '';
+  if (!confirm(`„${b.dataset.delName}“ wirklich löschen?${extra}`)) return;
+  try {
+    await api('DELETE', b.dataset.del);
+    toast('Gelöscht');
+    render();
+  } catch (err) { toast(err.message); }
+}, true);
+
 // ---------- Übersicht ----------
 async function renderOverview() {
   const s = await api('GET', `/api/summary?month=${state.month}`);
@@ -268,6 +286,7 @@ async function renderPlan() {
     <li data-id="${i.id}">
       <div class="main"><div class="title">${esc(i.name)}</div><div class="meta">${INTERVAL_LABEL[i.interval]}</div></div>
       <div class="right num">${fmt(i.amount)}${i.interval > 1 ? `<div class="meta">${fmt(i.amount / i.interval)} / Monat</div>` : ''}</div>
+      ${delBtn(`/api/incomes/${i.id}`, i.name)}
     </li>`).join('') : '<li class="muted small">Noch kein Einkommen eingetragen.</li>';
   $('#incomeTotal').textContent = fmt(incomes.reduce((s, i) => s + i.amount / i.interval, 0));
   $$('#incomeList li[data-id]').forEach((li) => li.addEventListener('click', () =>
@@ -290,6 +309,7 @@ async function renderPlan() {
           ${!f.dueMode && f.interval > 1 && f.kind !== 'budget' ? '<div class="meta">auf die Monate verteilt</div>' : ''}
         </div>
         <div class="right num">${rightSide(f)}</div>
+        ${delBtn(`/api/fixed/${f.id}`, f.name)}
       </li>`).join('')}
     </ul>`).join('') : '<p class="muted small empty">Noch keine Fixkosten eingetragen.</p>';
   const fixSum = fixed.filter((f) => f.kind !== 'budget').reduce((s, f) => s + monthly(f), 0);
@@ -324,6 +344,7 @@ async function renderEntries() {
         <div class="num ${e.kind === 'mehr' ? 'neg' : 'pos'}">${e.kind === 'mehr' ? '−' : '+'}${fmt(e.amount)}</div>
         ${e.kind === 'weniger' ? '<span class="pill weniger">Einnahme</span>' : ''}
       </div>
+      ${delBtn(`/api/entries/${e.id}`, `${e.shop || e.note || e.category} ${fmt(e.amount)}`, e.files ? 'Die angehängten Belege werden auch gelöscht.' : '')}
     </li>`).join('');
   $$('#entryList li[data-id]').forEach((li) => li.addEventListener('click', () =>
     openEntryDialog(entries.find((e) => e.id === Number(li.dataset.id)))));
@@ -434,6 +455,27 @@ $('#pwForm').addEventListener('submit', async (e) => {
     setOldPasswordNeeded(true);
   } catch (err) { toast(err.message); }
 });
+// ---------- „＋“ unten rechts: Schnell eintragen ----------
+const QUICK = {
+  ausgabe: () => openEntryDialog({ kind: 'mehr' }),
+  einnahme: () => openEntryDialog({ kind: 'weniger' }),
+  fix: () => openFixedDialog(),
+  einkommen: () => openIncomeDialog(),
+  schuld: () => openDebtDialog({ direction: 'schuld' }),
+  forderung: () => openDebtDialog({ direction: 'forderung' }),
+  vermoegen: () => openAssetDialog(),
+  geburtstag: () => openBirthdayDialog(),
+};
+$('#fab').addEventListener('click', () => $('#quickDlg').showModal());
+$('#quickClose').addEventListener('click', () => $('#quickDlg').close());
+$('#quickDlg').addEventListener('click', (e) => {
+  if (e.target === $('#quickDlg')) { $('#quickDlg').close(); return; } // Tipp neben das Menü schließt es
+  const b = e.target.closest('[data-qa]');
+  if (!b) return;
+  $('#quickDlg').close();
+  QUICK[b.dataset.qa]();
+});
+
 // CSV-Export: im Cloud-Modus direkt im Browser erzeugen
 $('#exportCsv').addEventListener('click', async (e) => {
   if (!window.Cloud?.enabled) return;
@@ -482,6 +524,7 @@ $('#dlgForm').addEventListener('submit', async (e) => {
   try {
     await dlgHandlers.onSave(Object.fromEntries(new FormData(e.target)));
     dlg.close(); render();
+    toast('Gespeichert ✓');
   } catch (err) { $('#dlgError').textContent = err.message; }
 });
 $('#dlgDelete').addEventListener('click', async () => {
@@ -698,6 +741,7 @@ async function renderLists() {
         ${d.done ? '<span class="pill done">erledigt ✓</span>' : ''}
         <button type="button" class="btn small" data-pay="${d.id}">± Eintragen</button>
       </div>
+      ${delBtn(`/api/debts/${d.id}`, d.person + (d.title ? ' – ' + d.title : ''), 'Alle Teilzahlungen und Belege dazu werden auch gelöscht.')}
     </li>`;
   }).join('');
   $$('#listBody li[data-id]').forEach((li) => li.addEventListener('click', (e) => {
@@ -825,6 +869,7 @@ async function renderBirthdays() {
         <div class="meta">🎁 ${giftText}${money ? ' · ' + money : ''}</div>
       </div>
       <span class="pill ${g?.status || 'offen'}">${GIFT_STATUS[g?.status || 'offen']}</span>
+      ${delBtn(`/api/birthdays/${b.id}`, b.name, 'Die geplanten Geschenke werden auch gelöscht.')}
     </li>`;
   }).join('');
   $$('#listBody li[data-id]').forEach((li) => li.addEventListener('click', () =>
@@ -1246,6 +1291,7 @@ async function renderAssets() {
           <strong class="num">${x.value == null ? '<span class="neg small">Preis fehlt</span>' : fmt(x.value)}</strong>
           <button type="button" class="btn small" data-amove="${x.id}">± Eintragen</button>
         </div>
+        ${delBtn(`/api/assets/${x.id}`, x.name, 'Alle Zu- und Abgänge dazu werden auch gelöscht.')}
       </li>`).join('')}`).join('');
   $('#listBody').innerHTML = groups;
   $$('#listBody li[data-id]').forEach((li) => li.addEventListener('click', (e) => {

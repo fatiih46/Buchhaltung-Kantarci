@@ -249,6 +249,49 @@ function staticServer() {
     await fatih.waitForFunction((t) => document.querySelector('#listTitle').textContent === t, title);
     assert.equal(await fatih.isVisible('section[data-view=lists]'), true);
   }
+  // „＋“ unten rechts: Schnell eintragen
+  await fatih.click('.topnav [data-tab=kosten]');
+  await fatih.click('[data-kosten=variabel]');
+  await fatih.click('#fab');
+  await fatih.waitForSelector('#quickDlg[open]');
+  await shot(fatih, 'cloud-9-schnell-eintragen.png');
+  await fatih.click('[data-qa=ausgabe]');
+  await fatih.waitForSelector('#dlg[open]');
+  assert.equal(await fatih.isVisible('#quickDlg'), false);
+  await fatih.fill('#dlgBody [name=amount]', '9,99');
+  await fatih.fill('#dlgBody [name=shop]', 'Kiosk');
+  await fatih.fill('#dlgBody [name=date]', '2026-11-22');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('Gespeichert'));
+  await fatih.waitForFunction(() => document.querySelector('#entryList').textContent.includes('Kiosk'));
+  // „−“ mit Rückfrage: Abbrechen lässt den Eintrag stehen, OK entfernt ihn – ohne den Bearbeiten-Dialog zu öffnen
+  const kioskIdx = () => fatih.$$eval('#entryList li', (lis) => lis.findIndex((li) => li.textContent.includes('Kiosk')));
+  const minusSel = async () => `#entryList li:nth-child(${(await kioskIdx()) + 1}) .del-btn`;
+  let asked = '';
+  fatih.once('dialog', (d) => { asked = d.message(); d.dismiss(); });
+  await fatih.click(await minusSel());
+  assert.match(asked, /„Kiosk 9,99\s€“ wirklich löschen\?/);
+  assert.equal(await fatih.isVisible('#dlg'), false, 'kein Bearbeiten-Dialog');
+  assert.ok((await kioskIdx()) >= 0, 'nach Abbrechen noch da');
+  fatih.once('dialog', (d) => d.accept());
+  await fatih.click(await minusSel());
+  await fatih.waitForFunction(() => !document.querySelector('#entryList').textContent.includes('Kiosk'));
+  assert.equal(await fatih.isVisible('#dlg'), false);
+  // „−“ auch bei Fixkosten, Einkommen, Schulden, Vermögen, Geburtstagen
+  await fatih.click('[data-kosten=fix]');
+  await fatih.waitForSelector('#fixedList .del-btn');
+  assert.ok((await fatih.$$('#fixedList .del-btn')).length >= 5);
+  await fatih.click('[data-kosten=einkommen]');
+  await fatih.waitForSelector('#incomeList .del-btn');
+  assert.equal((await fatih.$$('#incomeList .del-btn')).length, 1);
+  for (const tab of ['schuld', 'vermoegen', 'geburtstag']) {
+    await fatih.click(`.topnav [data-tab=${tab}]`);
+    await fatih.waitForSelector('#listBody .del-btn');
+  }
+  await fatih.click('.topnav [data-tab=schuld]');
+  await fatih.waitForSelector('#listBody .del-btn');
+  await shot(fatih, 'cloud-10-schulden-minus.png');
   await fatih.click('.topnav [data-tab=stats]');
   await fatih.waitForTimeout(500);
   await shot(fatih, 'cloud-3-auswertung.png');
