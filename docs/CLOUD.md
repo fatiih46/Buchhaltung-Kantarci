@@ -105,7 +105,7 @@ das in Ordnung; mit Bestätigung ist es etwas sicherer (niemand kann sich mit fr
 | Thema | |
 |---|---|
 | **Kosten** | 0 €. Der kostenlose Supabase-Tarif bietet 500 MB Datenbank und 1 GB für Belegfotos – Fotos werden vor dem Hochladen verkleinert (meist 0,3–0,7 MB), das reicht für rund 2.000 Belegfotos. |
-| **Pausieren** | Wird das Supabase-Projekt **7 Tage lang gar nicht benutzt**, pausiert Supabase es. Die Daten bleiben erhalten; im Supabase-Dashboard auf **Restore project** klicken. Wer die App regelmäßig öffnet, merkt davon nichts. |
+| **Pausieren** | Supabase pausiert kostenlose Projekte nach **7 Tagen ohne Zugriff**. Das verhindert der GitHub-Ablauf `.github/workflows/supabase-keepalive.yml`: Er fragt die Datenbank alle 3 Tage kurz ab. Falls das Projekt doch einmal pausiert ist, schickt GitHub eine E-Mail – dann im Supabase-Dashboard auf **Restore project** klicken; die Daten bleiben erhalten. |
 | **Wer sieht was** | Jede Person sieht nur ihre eigenen Einträge, Schulden, Zekât, Vermögen und Belege. Im Reiter „Haushalt“ sieht die andere Person nur die Monatssummen (Einkommen, Fixkosten, Ausgaben, verfügbar). Das ist in der Datenbank selbst abgesichert, nicht nur in der App. |
 | **Mehrere Geräte** | Du kannst dich am Handy und am Laptop gleichzeitig anmelden. Speichern beide fast gleichzeitig, gehen keine Einträge verloren. Kehrt man zur App zurück, wird der neueste Stand geladen. |
 | **Internet** | Zum Speichern ist eine Verbindung nötig. Klappt das Speichern nicht, zeigt die App eine Meldung und der Eintrag wird nicht übernommen – einfach später noch einmal. |
