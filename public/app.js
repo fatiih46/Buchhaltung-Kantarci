@@ -21,6 +21,7 @@ const state = {
   month: new Date().toISOString().slice(0, 7),
   tab: 'overview',
   list: 'schuld',
+  kosten: 'fix',
 };
 
 // ---------- API ----------
@@ -112,7 +113,8 @@ $('#registerForm').addEventListener('submit', async (e) => {
     });
     e.target.reset();
     history.replaceState(null, '', location.pathname);
-    state.tab = 'plan';
+    state.tab = 'kosten';
+    state.kosten = 'einkommen';
     await boot();
     toast('Willkommen! Trag zuerst dein Einkommen und deine Fixkosten ein.');
   } catch (err) {
@@ -136,10 +138,17 @@ function authMessage(err) {
 
 // ---------- Navigation ----------
 $$('[data-tab]').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+// Schulden, Forderungen, Vermögen, Zekât und Geburtstage teilen sich eine Ansicht
+const LIST_TABS = ['schuld', 'forderung', 'vermoegen', 'zekat', 'geburtstag'];
 function switchTab(tab) {
   state.tab = tab;
+  if (LIST_TABS.includes(tab)) state.list = tab;
+  const view = LIST_TABS.includes(tab) ? 'lists' : tab;
   $$('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  $$('[data-view]').forEach((s) => { s.hidden = s.dataset.view !== tab; });
+  $$('[data-view]').forEach((s) => { s.hidden = s.dataset.view !== view; });
+  // gewählten Bereich in der Leiste sichtbar machen (am Handy wird sie seitlich gewischt)
+  const btn = $(`.topnav [data-tab="${tab}"]`);
+  if (btn) btn.scrollIntoView({ block: 'nearest', inline: 'center' });
   render();
   window.scrollTo(0, 0);
 }
@@ -172,9 +181,9 @@ async function render() {
   $('#monthLabel').textContent = monthLabel(state.month);
   try {
     if (state.tab === 'overview') await renderOverview();
-    if (state.tab === 'plan') await renderPlan();
-    if (state.tab === 'entries') await renderEntries();
-    if (state.tab === 'lists') await renderLists();
+    if (state.tab === 'kosten') await renderKosten();
+    if (state.tab === 'stats') await renderStats();
+    if (LIST_TABS.includes(state.tab)) await renderLists();
     if (state.tab === 'household') await renderHousehold();
     if (state.tab === 'account') renderAccount();
   } catch (err) { toast(err.message); }
@@ -198,6 +207,7 @@ async function renderOverview() {
     <dt class="total">= Verfügbar</dt><dd class="total ${s.available < 0 ? 'neg' : 'pos'}">${fmt(s.available)}</dd>`;
 
   renderTeaser(s);
+  renderFixVar(s);
   const max = Math.max(1, ...s.categories.map((c) => c.fixed + Math.max(c.budget, c.spent)));
   $('#catEmpty').hidden = s.categories.length > 0;
   $('#catList').innerHTML = s.categories.filter((c) => c.total > 0).map((c) => {
@@ -223,9 +233,31 @@ async function renderOverview() {
     </div>`;
   }).join('');
 }
+// Tabelle: pro Kategorie Fixkosten und variable Kosten (ausgegeben, bei Budget „von …“)
+function renderFixVar(s) {
+  const rows = s.categories.filter((c) => c.fixed || c.spent || c.budget)
+    .sort((a, b) => (b.fixed + b.spent) - (a.fixed + a.spent));
+  const fixSum = rows.reduce((t, c) => t + c.fixed, 0);
+  const varSum = rows.reduce((t, c) => t + c.spent, 0);
+  const cell = (v) => (v ? fmt(v) : '<span class="muted">–</span>');
+  $('#fixVarTable').innerHTML = rows.length ? `
+    <thead><tr><th>Kategorie</th><th class="r">Fix</th><th class="r">Variabel</th><th class="r">Gesamt</th></tr></thead>
+    <tbody>${rows.map((c) => `<tr><td>${esc(c.name)}</td><td class="num r">${cell(c.fixed)}</td>
+      <td class="num r">${cell(c.spent)}${c.budget ? `<div class="muted small">von ${fmt(c.budget)}</div>` : ''}</td>
+      <td class="num r"><strong>${fmt(c.fixed + c.spent)}</strong></td></tr>`).join('')}</tbody>
+    <tfoot><tr><td>Summe</td><td class="num r">${fmt(fixSum)}</td><td class="num r">${fmt(varSum)}</td><td class="num r">${fmt(fixSum + varSum)}</td></tr></tfoot>`
+    : '<tbody><tr><td class="muted small">Noch keine Kosten in diesem Monat.</td></tr></tbody>';
+}
 $$('[data-quick]').forEach((b) => b.addEventListener('click', () => openEntryDialog({ kind: b.dataset.quick })));
 
-// ---------- Plan ----------
+// ---------- Kosten: Umschalter Einkommen | Fixkosten | Variabel ----------
+$$('[data-kosten]').forEach((b) => b.addEventListener('click', () => { state.kosten = b.dataset.kosten; renderKosten(); }));
+async function renderKosten() {
+  $$('[data-kosten]').forEach((b) => b.classList.toggle('active', b.dataset.kosten === state.kosten));
+  $$('[data-kostenview]').forEach((v) => { v.hidden = v.dataset.kostenview !== state.kosten; });
+  if (state.kosten === 'variabel') return renderEntries();
+  return renderPlan();
+}
 async function renderPlan() {
   const [incomes, fixed] = await Promise.all([api('GET', '/api/incomes'), api('GET', '/api/fixed')]);
 
@@ -263,13 +295,8 @@ async function renderPlan() {
 $('#addIncome').addEventListener('click', () => openIncomeDialog());
 $('#addFixed').addEventListener('click', () => openFixedDialog());
 
-// ---------- Ausgaben: Liste ----------
-state.sub = 'list';
-$$('[data-sub]').forEach((b) => b.addEventListener('click', () => { state.sub = b.dataset.sub; render(); }));
+// ---------- Variable Ausgaben ----------
 async function renderEntries() {
-  $$('[data-sub]').forEach((b) => b.classList.toggle('active', b.dataset.sub === state.sub));
-  $$('[data-subview]').forEach((v) => { v.hidden = v.dataset.subview !== state.sub; });
-  if (state.sub === 'stats') return renderStats();
   const entries = await api('GET', `/api/entries?month=${state.month}`);
   const out = entries.filter((e) => e.kind === 'mehr').reduce((s, e) => s + e.amount, 0);
   const inc = entries.filter((e) => e.kind === 'weniger').reduce((s, e) => s + e.amount, 0);
@@ -580,10 +607,9 @@ document.addEventListener('click', (e) => {
   if (!el) return;
   if (el.dataset.gotoLists) state.list = el.dataset.gotoLists;
   else if (!$('#teaserCalc').innerHTML) state.list = 'geburtstag';
-  switchTab('lists');
+  switchTab(state.list);
 });
 
-$$('[data-list]').forEach((b) => b.addEventListener('click', () => { state.list = b.dataset.list; renderLists(); }));
 $('#listAdd').addEventListener('click', () => {
   if (state.list === 'geburtstag') openBirthdayDialog();
   else if (state.list === 'zekat') openZakatYearDialog();
@@ -600,7 +626,6 @@ const LIST_TEXT = {
 };
 
 async function renderLists() {
-  $$('[data-list]').forEach((b) => b.classList.toggle('active', b.dataset.list === state.list));
   const t = LIST_TEXT[state.list];
   $('#listTitle').textContent = t.title;
   $('#listHint').textContent = t.hint;
@@ -669,7 +694,7 @@ function openDebtDialog(item) {
         <label>Fällig bis <input type="date" name="due_date" value="${esc(v('due_date'))}"></label>
       </div>
       ${isDebt ? `<label class="check"><input type="checkbox" name="in_budget" ${item.in_budget ? 'checked' : ''}> Monatliche Rate bei Fixkosten mitrechnen</label>
-      <div class="hint">Nur anhaken, wenn du die Rate nicht schon unter „Plan → Fixkosten“ eingetragen hast.</div>` : ''}
+      <div class="hint">Nur anhaken, wenn du die Rate nicht schon unter „Kosten → Fixkosten“ eingetragen hast.</div>` : ''}
       <label>Notiz <input name="note" maxlength="300" value="${esc(v('note'))}"></label>
       ${!isEdit ? `<label class="check"><input type="checkbox" name="book">
         ${isDebt ? 'Ich habe das Geld bekommen – als Einnahme buchen' : 'Das Geld ist von mir weggegangen – als Ausgabe buchen'}</label>

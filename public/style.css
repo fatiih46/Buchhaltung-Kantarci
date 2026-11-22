@@ -98,8 +98,8 @@ legend { color: var(--muted); font-size: .85rem; padding: 0 .3rem; }
 .seg button.active { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
 
 /* App-Layout */
+.app-head { position: sticky; top: 0; z-index: 5; }
 .topbar {
-  position: sticky; top: 0; z-index: 5;
   background: var(--primary); color: var(--primary-text);
   padding: calc(.7rem + env(safe-area-inset-top)) 1rem .7rem;
   display: flex; align-items: center; justify-content: space-between; gap: .5rem;
@@ -108,7 +108,7 @@ legend { color: var(--muted); font-size: .85rem; padding: 0 .3rem; }
 .hello { font-size: .82rem; opacity: .85; }
 .month-picker { display: flex; align-items: center; gap: .1rem; font-weight: 600; }
 .month-picker span { min-width: 7.5rem; text-align: center; }
-.content { max-width: 720px; margin: 0 auto; padding: 1rem 1rem calc(5.5rem + env(safe-area-inset-bottom)); display: flex; flex-direction: column; }
+.content { max-width: 720px; margin: 0 auto; padding: 1rem 1rem calc(2rem + env(safe-area-inset-bottom)); display: flex; flex-direction: column; }
 .content section { display: flex; flex-direction: column; gap: 1rem; }
 .card { background: var(--card); border-radius: var(--radius); padding: 1rem; box-shadow: var(--shadow); }
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-bottom: .4rem; }
@@ -158,18 +158,6 @@ legend { color: var(--muted); font-size: .85rem; padding: 0 .3rem; }
 .invite { display: flex; gap: .6rem; align-items: center; }
 .invite code { font-size: 1.3rem; letter-spacing: .15em; background: var(--primary-soft); padding: .4rem .8rem; border-radius: 8px; font-weight: 700; }
 
-.tabbar {
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 5;
-  background: var(--card); border-top: 1px solid var(--line);
-  display: grid; grid-template-columns: repeat(5, 1fr);
-  padding-bottom: env(safe-area-inset-bottom);
-}
-.tabbar button {
-  font: inherit; font-size: .7rem; background: none; border: 0; color: var(--muted); cursor: pointer;
-  padding: .45rem 0 .5rem; display: flex; flex-direction: column; align-items: center; gap: .1rem;
-}
-.tabbar button span { font-size: 1.25rem; line-height: 1.2; }
-.tabbar button.active { color: var(--primary); font-weight: 700; }
 
 dialog {
   border: 0; border-radius: var(--radius); padding: 1.2rem; width: min(440px, calc(100vw - 2rem));
@@ -181,14 +169,11 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .hint { font-size: .8rem; color: var(--muted); margin-top: -.4rem; }
 
 .toast {
-  position: fixed; left: 50%; bottom: calc(5rem + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  position: fixed; left: 50%; bottom: calc(1.5rem + env(safe-area-inset-bottom)); transform: translateX(-50%);
   background: var(--text); color: var(--bg); padding: .6rem 1rem; border-radius: 12px; font-size: .9rem; z-index: 20;
   max-width: calc(100vw - 2rem); width: max-content; text-align: center;
 }
 
-@media (min-width: 760px) {
-  .tabbar { top: auto; max-width: 720px; margin: 0 auto 1rem; border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow); }
-}
 
 /* Kopfzeile: Platz für Zahnrad */
 .topbar > div:first-child { min-width: 0; }
@@ -232,7 +217,6 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .row3 { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: .6rem; }
 
 /* Ausgaben & Auswertung */
-.seg2 { grid-template-columns: 1fr 1fr; margin: 0; }
 .kpis { margin: 0; }
 .kpis div { background: var(--card); box-shadow: var(--shadow); padding: .7rem .8rem; border-radius: var(--radius); }
 .kpis strong { font-size: 1.2rem; display: block; }
@@ -272,9 +256,6 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 input[type=date] { min-width: 0; -webkit-appearance: none; appearance: none; }
 
 /* Zekât */
-.seg4 { grid-template-columns: repeat(3, 1fr); margin: 0; gap: 4px; }
-.seg4 button { font-size: .9rem; padding: .5rem .2rem; }
-@media (min-width: 560px) { .seg4 { grid-template-columns: repeat(5, 1fr); } }
 .date-badge.year b { font-size: .95rem; }
 .doc-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; margin: -.2rem 0 .6rem; }
 .calc-box { border: 1px solid var(--line); border-radius: 10px; padding: .55rem .8rem; }
@@ -321,3 +302,31 @@ input[type=date] { min-width: 0; -webkit-appearance: none; appearance: none; }
   font-size: .82rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .list li.group-head:hover { background: none; }
 .list li.group-head .num { text-transform: none; letter-spacing: 0; }
+
+/* Bereiche oben nebeneinander – am Handy seitlich wischbar */
+.topnav {
+  display: flex; gap: .35rem; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  background: var(--card); border-bottom: 1px solid var(--line); padding: .5rem 1rem;
+}
+.topnav::-webkit-scrollbar { display: none; }
+.topnav button {
+  flex: none; font: inherit; font-size: .9rem; font-weight: 600; white-space: nowrap; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 999px; padding: .4rem .85rem;
+}
+.topnav button.active { background: var(--primary); border-color: var(--primary); color: var(--primary-text); }
+@media (min-width: 760px) { .topnav { justify-content: center; flex-wrap: wrap; } }
+
+/* Kosten: Umschalter Einkommen | Fixkosten | Variabel */
+.seg3 { grid-template-columns: repeat(3, 1fr); margin: 0; }
+.note { background: var(--primary-soft); border-radius: 8px; padding: .55rem .75rem; margin: .2rem 0 .6rem; font-size: .88rem; }
+
+/* Übersicht: Fix vs. Variabel */
+.table-wrap { overflow-x: auto; }
+.fv-table { font-size: .82rem; }
+.fv-table th, .fv-table td { padding: .35rem .15rem; }
+.fv-table td:first-child { padding-right: .4rem; }
+.fv-table .muted.small { font-size: .72rem; }
+@media (min-width: 480px) { .fv-table { font-size: .9rem; } .fv-table th, .fv-table td { padding: .35rem .3rem; } }
+.fv-table td { vertical-align: top; }
+.fv-table .r { text-align: right; }
+.fv-table tfoot td { font-weight: 700; border-top: 2px solid var(--line); border-bottom: 0; }

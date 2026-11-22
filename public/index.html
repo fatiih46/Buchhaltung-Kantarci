@@ -50,6 +50,7 @@
 
   <!-- App -->
   <div id="app" hidden>
+    <div class="app-head">
     <header class="topbar">
       <div>
         <div class="hh-name" id="hhName"></div>
@@ -62,6 +63,20 @@
         <button type="button" class="icon-btn gear" data-tab="account" aria-label="Konto">⚙</button>
       </div>
     </header>
+
+    <!-- Alle Bereiche nebeneinander (am Handy wischbar) -->
+    <nav class="topnav" aria-label="Bereiche">
+      <button type="button" data-tab="overview" class="active">Übersicht</button>
+      <button type="button" data-tab="kosten">Kosten</button>
+      <button type="button" data-tab="stats">Auswertung</button>
+      <button type="button" data-tab="schuld">Schulden</button>
+      <button type="button" data-tab="forderung">Forderungen</button>
+      <button type="button" data-tab="vermoegen">Vermögen &amp; Gold</button>
+      <button type="button" data-tab="zekat">Zekât</button>
+      <button type="button" data-tab="geburtstag">Geburtstage</button>
+      <button type="button" data-tab="household">Haushalt</button>
+    </nav>
+    </div>
 
     <main class="content">
       <!-- Übersicht -->
@@ -94,39 +109,44 @@
         <div class="card">
           <h2>Nach Kategorie</h2>
           <div id="catList" class="cat-list"></div>
-          <p class="muted small empty" id="catEmpty" hidden>Noch keine Kosten eingetragen. Leg im Reiter „Plan“ los.</p>
+          <p class="muted small empty" id="catEmpty" hidden>Noch keine Kosten eingetragen. Leg unter „Kosten“ los.</p>
+        </div>
+
+        <div class="card">
+          <h2>Fixkosten und variable Kosten</h2>
+          <p class="muted small">Pro Kategorie in diesem Monat: was fest jeden Monat anfällt und was du zusätzlich ausgegeben hast.</p>
+          <div class="table-wrap"><table class="mini-table fv-table" id="fixVarTable"></table></div>
         </div>
       </section>
 
-      <!-- Plan: Einkommen + Fixkosten -->
-      <section data-view="plan" hidden>
-        <div class="card">
+      <!-- Kosten: Einkommen, Fixkosten, variable Ausgaben -->
+      <section data-view="kosten" hidden>
+        <div class="seg seg3" role="tablist">
+          <button type="button" data-kosten="einkommen">Einkommen</button>
+          <button type="button" data-kosten="fix" class="active">Fixkosten</button>
+          <button type="button" data-kosten="variabel">Variabel</button>
+        </div>
+        <div class="card" data-kostenview="einkommen" hidden>
           <div class="card-head">
             <h2>Einkommen</h2>
             <button type="button" class="btn small" id="addIncome">＋ Hinzufügen</button>
           </div>
+          <p class="note">🔁 Lohn, Kindergeld … einmal eintragen – zählt <strong>jeden Monat automatisch</strong>, bis du es änderst.</p>
           <ul class="list" id="incomeList"></ul>
           <div class="list-total"><span>Pro Monat</span><strong id="incomeTotal"></strong></div>
         </div>
 
-        <div class="card">
+        <div class="card" data-kostenview="fix">
           <div class="card-head">
             <h2>Fixkosten &amp; Budgets</h2>
             <button type="button" class="btn small" id="addFixed">＋ Hinzufügen</button>
           </div>
+          <p class="note">🔁 Einmal eintragen – zählt <strong>jeden Monat automatisch</strong>, bis du den Eintrag änderst oder löschst. Zum Ändern einfach antippen.</p>
           <p class="muted small"><strong>Fixkosten</strong> bleiben jeden Monat gleich (Hausabtrag, Versicherungen, Abos …). Ein <strong>Budget</strong> ist deine Obergrenze für variable Ausgaben (z. B. Einkaufen 450 €) – deine eingetragenen Ausgaben werden damit verrechnet. Jährliche Beträge werden auf den Monat umgerechnet.</p>
           <div id="fixedList"></div>
           <div class="list-total"><span>Pro Monat (dein Anteil)</span><strong id="fixedTotal"></strong></div>
         </div>
-      </section>
-
-      <!-- Ausgaben: Liste + Auswertung -->
-      <section data-view="entries" hidden>
-        <div class="seg seg2" role="tablist">
-          <button type="button" data-sub="list" class="active">Liste</button>
-          <button type="button" data-sub="stats">Auswertung</button>
-        </div>
-        <div data-subview="list" class="stack">
+        <div data-kostenview="variabel" class="stack" hidden>
           <div class="card">
             <div class="card-head">
               <h2>Variable Ausgaben</h2>
@@ -138,7 +158,11 @@
             <p class="muted small empty" id="entryEmpty" hidden>Keine Ausgaben in diesem Monat.</p>
           </div>
         </div>
-        <div data-subview="stats" class="stack" hidden>
+      </section>
+
+      <!-- Auswertung & Sparpotenzial -->
+      <section data-view="stats" hidden>
+        <div class="stack">
           <div id="statsKpis" class="summary-row kpis"></div>
           <div class="card">
             <div class="card-head"><h2>💡 Dein Sparpotenzial</h2><strong id="potential" class="num"></strong></div>
@@ -164,15 +188,8 @@
         </div>
       </section>
 
-      <!-- Listen: Schulden, Forderungen, Geburtstage -->
+      <!-- Schulden, Forderungen, Vermögen, Zekât, Geburtstage (gleiche Ansicht, Inhalt je nach Bereich) -->
       <section data-view="lists" hidden>
-        <div class="seg seg4" role="tablist">
-          <button type="button" data-list="vermoegen">Vermögen</button>
-          <button type="button" data-list="schuld" class="active">Schulden</button>
-          <button type="button" data-list="forderung">Forderungen</button>
-          <button type="button" data-list="geburtstag">Geburtstage</button>
-          <button type="button" data-list="zekat">Zekât</button>
-        </div>
         <div class="card">
           <div class="card-head">
             <h2 id="listTitle"></h2>
@@ -221,13 +238,6 @@
       </section>
     </main>
 
-    <nav class="tabbar">
-      <button type="button" data-tab="overview" class="active"><span>◎</span>Übersicht</button>
-      <button type="button" data-tab="plan"><span>☰</span>Plan</button>
-      <button type="button" data-tab="entries"><span>€</span>Ausgaben</button>
-      <button type="button" data-tab="lists"><span>✎</span>Listen</button>
-      <button type="button" data-tab="household"><span>⌂</span>Haushalt</button>
-    </nav>
   </div>
 
   <!-- Formular-Dialog -->

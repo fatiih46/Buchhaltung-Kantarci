@@ -204,9 +204,31 @@ function staticServer() {
   // ---------- 10. Bildschirmfotos ----------
   await fatih.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
   await fatih.waitForTimeout(500);
-  await shot(fatih, 'cloud-2-uebersicht.png');
-  await fatih.evaluate(() => { switchTab('entries'); });
-  await fatih.click('[data-sub="stats"]');
+  await shot(fatih, 'cloud-2-uebersicht.png', true);
+  // Übersicht endet mit der Tabelle Fix vs. Variabel
+  const fv = await fatih.$$eval('#fixVarTable tfoot td', (tds) => tds.map((t) => t.textContent));
+  assert.equal(fv[0], 'Summe');
+  assert.ok(fv[1].includes('800,00') && fv[2].includes('476,69') && fv[3].includes('1.276,69'), 'Fix/Variabel-Summen: ' + fv);
+  // Navigation oben: Kosten mit Umschalter
+  await fatih.click('.topnav [data-tab=kosten]');
+  await fatih.waitForSelector('[data-kostenview=einkommen]:not([hidden])'); // nach der Registrierung: Einkommen zuerst
+  assert.equal(await fatih.isVisible('[data-kostenview=fix]'), false);
+  await fatih.click('[data-kosten=einkommen]');
+  await fatih.waitForSelector('#incomeList li[data-id]');
+  await fatih.click('[data-kosten=variabel]');
+  await fatih.waitForSelector('#entryList li[data-id]');
+  await shot(fatih, 'cloud-6-kosten-variabel.png');
+  await fatih.click('[data-kosten=fix]');
+  await fatih.waitForSelector('[data-kostenview=fix]:not([hidden]) #fixedList li');
+  assert.equal(await fatih.isVisible('[data-kostenview=variabel]'), false);
+  await shot(fatih, 'cloud-7-kosten-fix.png');
+  // Listen-Bereiche direkt oben erreichbar
+  for (const [tab, title] of [['schuld', 'Meine Schulden'], ['forderung', 'Bekomme ich zurück'], ['vermoegen', 'Mein Vermögen'], ['zekat', 'Zekât'], ['geburtstag', 'Geburtstage & Geschenke']]) {
+    await fatih.click(`.topnav [data-tab=${tab}]`);
+    await fatih.waitForFunction((t) => document.querySelector('#listTitle').textContent === t, title);
+    assert.equal(await fatih.isVisible('section[data-view=lists]'), true);
+  }
+  await fatih.click('.topnav [data-tab=stats]');
   await fatih.waitForTimeout(500);
   await shot(fatih, 'cloud-3-auswertung.png');
   await frau.evaluate(() => { state.month = '2026-11'; switchTab('household'); });
