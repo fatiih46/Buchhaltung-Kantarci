@@ -411,3 +411,45 @@ test('Vermögen: Posten, Gold in Gramm, Zu-/Abgänge, Zekât-Vorschlag, nichts w
   assert.equal((await c('DELETE', `/api/assets/${gold.id}`)).status, 200);
   assert.equal((await c('GET', '/api/assets')).data.assets.length, 4);
 });
+
+test('Fixkosten vierteljährlich/halbjährlich/jährlich: im Fälligkeitsmonat oder verteilt', async () => {
+  const c = client();
+  await c('POST', '/api/register', { name: 'Faellig', email: 'faellig@example.com', password: 'geheim123' });
+  // halbjährlich, ganzer Betrag im Fälligkeitsmonat ab März 2026, mein Anteil 50 %
+  let r = await c('POST', '/api/fixed', { name: 'Kfz-Versicherung', category: 'Versicherungen', amount: '600', interval: 6, share: 50, due_mode: 'faellig', due_date: '2026-03-15' });
+  assert.equal(r.status, 200);
+  // jährlich, verteilt (wie bisher): 1200 / 12 = 100 jeden Monat
+  await c('POST', '/api/fixed', { name: 'Urlaub', category: 'Urlaub', amount: '1200', interval: 12, due_mode: 'verteilt', due_date: '2026-07-01' });
+  // vierteljährlich ab Januar 2026
+  await c('POST', '/api/fixed', { name: 'GEZ', category: 'Handy, Internet & Abos', amount: '55,08', interval: 3, due_mode: 'faellig', due_date: '2026-01-15' });
+  const fixed = async (m) => (await c('GET', `/api/summary?month=${m}`)).data.fixedTotal;
+  assert.equal(await fixed('2026-02'), 100, 'vor dem ersten Termin nichts fällig');
+  assert.equal(await fixed('2026-01'), 155.08, 'GEZ fällig');
+  assert.equal(await fixed('2026-03'), 400, 'Kfz (Anteil 300) + Urlaub verteilt');
+  assert.equal(await fixed('2026-04'), 155.08);
+  assert.equal(await fixed('2026-06'), 100);
+  assert.equal(await fixed('2026-09'), 400);
+  assert.equal(await fixed('2027-03'), 400, 'jedes halbe Jahr wieder');
+  const s = (await c('GET', '/api/summary?month=2026-03')).data;
+  assert.deepEqual(s.dueThisMonth.map((d) => [d.name, d.amount]), [['Kfz-Versicherung', 300]]);
+  // Liste: Betrag im gewählten Monat und nächste Fälligkeit
+  const list = (await c('GET', '/api/fixed?month=2026-09')).data;
+  const kfz = list.find((f) => f.name === 'Kfz-Versicherung');
+  assert.equal(kfz.dueMode, true);
+  assert.equal(kfz.dueNow, true);
+  assert.equal(kfz.thisMonth, 300);
+  assert.match(kfz.nextDue, /^\d{4}-(03|09)-15$/);
+  assert.ok(kfz.nextDue >= new Date().toISOString().slice(0, 10));
+  const urlaub = list.find((f) => f.name === 'Urlaub');
+  assert.equal(urlaub.dueMode, false);
+  assert.equal(urlaub.due_date, null, 'verteilt speichert kein Datum');
+  // ohne Datum geht „im Fälligkeitsmonat“ nicht; monatlich und Budgets ignorieren die Fälligkeit
+  r = await c('POST', '/api/fixed', { name: 'X', category: 'Sonstiges', amount: '10', interval: 6, due_mode: 'faellig', due_date: '' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /Fälligkeit/);
+  await c('POST', '/api/fixed', { name: 'Handy', category: 'Handy, Internet & Abos', amount: '20', interval: 1, due_mode: 'faellig', due_date: '2026-05-01' });
+  assert.equal((await c('GET', '/api/fixed')).data.find((f) => f.name === 'Handy').due_date, null);
+  // Ändern auf „verteilt“ entfernt das Datum
+  await c('PUT', `/api/fixed/${kfz.id}`, { name: 'Kfz-Versicherung', category: 'Versicherungen', amount: '600', interval: 6, share: 50, due_mode: 'verteilt' });
+  assert.equal(await fixed('2026-04'), 155.08 + 50 + 20);
+});

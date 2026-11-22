@@ -206,6 +206,9 @@ async function renderOverview() {
     ${s.refunds > 0 ? `<dt>+ Einnahmen / Erstattungen</dt><dd>${fmt(s.refunds)}</dd>` : ''}
     <dt class="total">= Verfügbar</dt><dd class="total ${s.available < 0 ? 'neg' : 'pos'}">${fmt(s.available)}</dd>`;
 
+  $('#dueNote').hidden = !s.dueThisMonth.length;
+  $('#dueNote').innerHTML = s.dueThisMonth.length ? `📅 Diesen Monat fällig: ${s.dueThisMonth
+    .map((d) => `<strong>${esc(d.name)}</strong> ${fmt(d.amount)}`).join(', ')} – ist bei den Fixkosten schon abgezogen.` : '';
   renderTeaser(s);
   renderFixVar(s);
   const max = Math.max(1, ...s.categories.map((c) => c.fixed + Math.max(c.budget, c.spent)));
@@ -259,7 +262,7 @@ async function renderKosten() {
   return renderPlan();
 }
 async function renderPlan() {
-  const [incomes, fixed] = await Promise.all([api('GET', '/api/incomes'), api('GET', '/api/fixed')]);
+  const [incomes, fixed] = await Promise.all([api('GET', '/api/incomes'), api('GET', `/api/fixed?month=${state.month}`)]);
 
   $('#incomeList').innerHTML = incomes.length ? incomes.map((i) => `
     <li data-id="${i.id}">
@@ -272,7 +275,10 @@ async function renderPlan() {
 
   const groups = {};
   for (const f of fixed) (groups[f.category] ||= []).push(f);
-  const monthly = (f) => (f.amount / f.interval) * (f.share / 100);
+  const monthly = (f) => f.thisMonth;
+  const rightSide = (f) => f.dueMode
+    ? (f.dueNow ? `${fmt(f.thisMonth)}<div class="meta">diesen Monat fällig</div>` : `<span class="muted">0,00 €</span><div class="meta">diesen Monat</div>`)
+    : `${fmt(f.thisMonth)}<div class="meta">/ Monat</div>`;
   $('#fixedList').innerHTML = fixed.length ? Object.entries(groups).map(([cat, items]) => `
     <div class="group-title">${esc(cat)}</div>
     <ul class="list">${items.map((f) => `
@@ -280,8 +286,10 @@ async function renderPlan() {
         <div class="main">
           <div class="title">${esc(f.name)} ${f.kind === 'budget' ? '<span class="pill budget">Budget</span>' : ''}</div>
           <div class="meta">${fmt(f.amount)} ${INTERVAL_LABEL[f.interval]}${f.share < 100 ? ` · dein Anteil ${f.share.toLocaleString('de-DE')} %` : ''}</div>
+          ${f.dueMode && f.nextDue ? `<div class="meta">📅 nächste Fälligkeit ${fmtDate(f.nextDue)}</div>` : ''}
+          ${!f.dueMode && f.interval > 1 && f.kind !== 'budget' ? '<div class="meta">auf die Monate verteilt</div>' : ''}
         </div>
-        <div class="right num">${fmt(monthly(f))}<div class="meta">/ Monat</div></div>
+        <div class="right num">${rightSide(f)}</div>
       </li>`).join('')}
     </ul>`).join('') : '<p class="muted small empty">Noch keine Fixkosten eingetragen.</p>';
   const fixSum = fixed.filter((f) => f.kind !== 'budget').reduce((s, f) => s + monthly(f), 0);
@@ -502,20 +510,44 @@ function openIncomeDialog(item) {
 
 function openFixedDialog(item) {
   const kind = item?.kind || 'fix';
+  // neue Einträge: im Fälligkeitsmonat; ältere Einträge mit 3/6/12 Monaten ohne Datum bleiben „verteilt“
+  const dueMode = !item || item.due_date || item.interval === 1 ? 'faellig' : 'verteilt';
   openDialog({
     title: item ? 'Bearbeiten' : 'Fixkosten / Budget hinzufügen',
     html: `
       <fieldset>
         <legend>Art</legend>
-        <label class="radio"><input type="radio" name="kind" value="fix" ${kind === 'fix' ? 'checked' : ''}> Fixkosten – jeden Monat gleich</label>
+        <label class="radio"><input type="radio" name="kind" value="fix" ${kind === 'fix' ? 'checked' : ''}> Fixkosten – feste Beträge (monatlich, vierteljährlich, halbjährlich, jährlich)</label>
         <label class="radio"><input type="radio" name="kind" value="budget" ${kind === 'budget' ? 'checked' : ''}> Budget – Obergrenze für variable Ausgaben</label>
       </fieldset>
       <label>Bezeichnung <input name="name" required maxlength="120" value="${esc(item?.name)}" placeholder="z. B. Hausabtrag, Einkaufen, Kfz-Versicherung"></label>
       ${categorySelect(item?.category)}
       <div class="row2">${amountInput(item?.amount)}${intervalSelect(item?.interval)}</div>
+      <fieldset data-due-box hidden>
+        <legend>Wann wird abgezogen?</legend>
+        <label class="radio"><input type="radio" name="due_mode" value="faellig" ${dueMode === 'faellig' ? 'checked' : ''}> Im Monat der Fälligkeit – ganzer Betrag</label>
+        <label data-due-date>Nächste Fälligkeit <input type="date" name="due_date" value="${esc(item?.due_date || '')}"></label>
+        <div class="hint" data-due-date>Danach zieht die App den Betrag automatisch wieder ab – <span data-due-every></span>.</div>
+        <label class="radio"><input type="radio" name="due_mode" value="verteilt" ${dueMode === 'verteilt' ? 'checked' : ''}> Jeden Monat einen Teil zurücklegen</label>
+      </fieldset>
       <label>Mein Anteil (%) <input name="share" inputmode="decimal" value="${item?.share ?? 100}"></label>
       <div class="hint">Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) den Gesamtbetrag eintragen und 50 % wählen.
         Bei einem Budget werden deine Ausgaben derselben Kategorie damit verrechnet.</div>`,
+    onOpen: (root) => {
+      const EVERY = { 3: 'alle 3 Monate', 6: 'alle 6 Monate', 12: 'jedes Jahr' };
+      const update = () => {
+        const iv = Number($('[name=interval]', root).value);
+        const isFix = $('[name=kind]:checked', root).value === 'fix';
+        const box = $('[data-due-box]', root);
+        box.hidden = !(isFix && iv > 1);
+        const faellig = $('[name=due_mode]:checked', root).value === 'faellig';
+        $$('[data-due-date]', root).forEach((el) => { el.hidden = !faellig; });
+        $('[name=due_date]', root).required = !box.hidden && faellig;
+        $('[data-due-every]', root).textContent = EVERY[iv] || '';
+      };
+      root.addEventListener('change', update);
+      update();
+    },
     onSave: (d) => item ? api('PUT', `/api/fixed/${item.id}`, d) : api('POST', '/api/fixed', d),
     onDelete: item && (() => api('DELETE', `/api/fixed/${item.id}`)),
   });

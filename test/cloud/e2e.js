@@ -31,7 +31,7 @@ function staticServer() {
   const browser = await chromium.launch();
   const errors = [];
   async function newPage(name) {
-    const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, deviceScaleFactor: 2 });
+    const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, deviceScaleFactor: 2, locale: 'de-DE' });
     await ctx.exposeFunction('__sb', backend.handle);
     await ctx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.HAUSHALT_CONFIG = { supabaseUrl: 'https://test.supabase.co', supabaseKey: 'test' };" }));
     await ctx.route('**/vendor/supabase.js', (r) => r.fulfill({ contentType: 'text/javascript', body: fs.readFileSync(path.join(__dirname, 'fake-supabase-client.js'), 'utf8') }));
@@ -221,7 +221,28 @@ function staticServer() {
   await fatih.click('[data-kosten=fix]');
   await fatih.waitForSelector('[data-kostenview=fix]:not([hidden]) #fixedList li');
   assert.equal(await fatih.isVisible('[data-kostenview=variabel]'), false);
-  await shot(fatih, 'cloud-7-kosten-fix.png');
+  // Halbjährliche Fixkosten über das Formular: Frage „Wann wird abgezogen?“ erscheint nur bei 3/6/12 Monaten
+  await fatih.click('#addFixed');
+  await fatih.waitForSelector('#dlg[open]');
+  assert.equal(await fatih.isVisible('[data-due-box]'), false, 'bei monatlich keine Frage');
+  await fatih.fill('#dlgBody [name=name]', 'Kfz-Versicherung');
+  await fatih.selectOption('#dlgBody [name=category]', 'Versicherungen');
+  await fatih.fill('#dlgBody [name=amount]', '600');
+  await fatih.selectOption('#dlgBody [name=interval]', '6');
+  assert.equal(await fatih.isVisible('[data-due-box]'), true);
+  assert.equal(await fatih.textContent('[data-due-every]'), 'alle 6 Monate');
+  await fatih.click('#dlgForm button[type=submit]');
+  assert.equal(await fatih.$eval('#dlgBody [name=due_date]', (el) => el.validity.valueMissing), true, 'Datum ist Pflicht');
+  await fatih.fill('#dlgBody [name=due_date]', '2026-11-15');
+  await shot(fatih, 'cloud-8-fixkosten-faellig.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelector('#fixedList').textContent.includes('nächste Fälligkeit'));
+  const kfzRow = await fatih.$eval('#fixedList', (el) => [...el.querySelectorAll('li')].find((li) => li.textContent.includes('Kfz')).textContent);
+  assert.ok(kfzRow.includes('halbjährlich') && kfzRow.includes('diesen Monat fällig') && kfzRow.includes('600,00'), kfzRow);
+  assert.equal((await api(fatih, 'GET', '/api/summary?month=2026-11')).fixedTotal, 1400);
+  assert.equal((await api(fatih, 'GET', '/api/summary?month=2026-12')).fixedTotal, 800);
+  await shot(fatih, 'cloud-7-kosten-fix.png', true);
   // Listen-Bereiche direkt oben erreichbar
   for (const [tab, title] of [['schuld', 'Meine Schulden'], ['forderung', 'Bekomme ich zurück'], ['vermoegen', 'Mein Vermögen'], ['zekat', 'Zekât'], ['geburtstag', 'Geburtstage & Geschenke']]) {
     await fatih.click(`.topnav [data-tab=${tab}]`);

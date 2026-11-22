@@ -90,6 +90,7 @@
         <div class="card">
           <h2>Rechnung für den Monat</h2>
           <dl class="calc" id="calc"></dl>
+          <p class="note" id="dueNote" hidden></p>
         </div>
 
         <div class="quick">
@@ -141,10 +142,10 @@
             <h2>Fixkosten &amp; Budgets</h2>
             <button type="button" class="btn small" id="addFixed">＋ Hinzufügen</button>
           </div>
-          <p class="note">🔁 Einmal eintragen – zählt <strong>jeden Monat automatisch</strong>, bis du den Eintrag änderst oder löschst. Zum Ändern einfach antippen.</p>
-          <p class="muted small"><strong>Fixkosten</strong> bleiben jeden Monat gleich (Hausabtrag, Versicherungen, Abos …). Ein <strong>Budget</strong> ist deine Obergrenze für variable Ausgaben (z. B. Einkaufen 450 €) – deine eingetragenen Ausgaben werden damit verrechnet. Jährliche Beträge werden auf den Monat umgerechnet.</p>
+          <p class="note">🔁 Einmal eintragen – die App zieht es <strong>automatisch</strong> ab: monatlich jeden Monat, sonst im Monat der Fälligkeit. Zum Ändern antippen.</p>
+          <p class="muted small"><strong>Budget</strong> = Obergrenze für variable Ausgaben (z. B. Einkaufen 450 €).</p>
           <div id="fixedList"></div>
-          <div class="list-total"><span>Pro Monat (dein Anteil)</span><strong id="fixedTotal"></strong></div>
+          <div class="list-total"><span>In diesem Monat (dein Anteil)</span><strong id="fixedTotal"></strong></div>
         </div>
         <div data-kostenview="variabel" class="stack" hidden>
           <div class="card">
