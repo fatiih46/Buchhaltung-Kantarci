@@ -226,6 +226,13 @@
           <h2>Mein Konto</h2>
           <p id="accountInfo" class="muted"></p>
           <a class="btn" id="exportCsv" href="/api/export.csv">Daten als CSV exportieren</a>
+          <button type="button" class="btn ghost" id="showNotice">📄 Hinweis zur Nutzung</button>
+        </div>
+        <div class="card" id="adminCard" hidden>
+          <div class="card-head"><h2>👑 Wer nutzt die App?</h2><button type="button" class="btn small" id="adminReload">Aktualisieren</button></div>
+          <p class="muted small">Nur für dich sichtbar. Ohne Inhalte – keine Beträge oder Einträge, nur wer registriert ist und wann zuletzt aktiv.</p>
+          <div id="adminStats" class="summary-row"></div>
+          <ul class="list" id="adminList"></ul>
         </div>
         <div class="card">
           <h2>Passwort ändern</h2>
@@ -242,14 +249,36 @@
 
   </div>
 
+  <!-- Hinweis zur Nutzung (vor der Registrierung und einmal für bestehende Konten) -->
+  <dialog id="noticeDlg" aria-labelledby="noticeTitle">
+    <h2 id="noticeTitle">⚠️ Bitte kurz lesen</h2>
+    <div class="notice-text">
+      <p>Dieses Haushaltsbuch ist ein <strong>privates Projekt für Familie und Freunde</strong> – keine geprüfte Finanz-App eines Unternehmens.</p>
+      <ul>
+        <li><strong>Nutzung auf eigene Verantwortung.</strong> Es gibt keine Garantie, dass immer alles fehlerfrei funktioniert oder dass Daten nie verloren gehen. Sichere deine Daten ab und zu unter ⚙ „Daten als CSV exportieren“.</li>
+        <li><strong>Keine besonderen Schutzmechanismen</strong> wie bei Banken (z. B. keine Zwei-Faktor-Anmeldung, keine Prüfung durch Dritte). Trag deshalb <strong>keine Passwörter, PINs, TANs oder Zugangsdaten</strong> ein und verwende ein eigenes, sicheres Passwort.</li>
+        <li><strong>Datenschutz:</strong> Deine Einträge sieht in der App nur dein eigenes Konto; im gemeinsamen Haushalt sieht die andere Person nur Monatssummen. Der Betreiber sieht in seiner Übersicht nur, <em>wer</em> die App nutzt (Name, E-Mail, Haushalt, Anmelde- und Nutzungszeitpunkt) – keine Beträge oder Einträge. Technisch liegen die Daten bei Supabase (Server in Frankfurt); als Verwalter der Datenbank hätte der Betreiber dort Zugriff, schaut sich Inhalte aber nicht an.</li>
+        <li>Berechnungen (z. B. verfügbarer Betrag, Zekât) sind eine <strong>Hilfe</strong> und ersetzen keine Beratung.</li>
+        <li>Konto oder Daten löschen lassen: einfach beim Betreiber melden.</li>
+      </ul>
+    </div>
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="noticeCancel">Abbrechen</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn primary" id="noticeOk">Verstanden</button>
+    </div>
+  </dialog>
+
   <!-- Schnell eintragen -->
   <dialog id="quickDlg" class="sheet" aria-labelledby="quickTitle">
     <h2 id="quickTitle">Was möchtest du eintragen?</h2>
+    <button type="button" class="btn scan-btn wide" data-qa="scan">📷 Kassenbon scannen</button>
     <div class="quick-grid">
       <button type="button" data-qa="ausgabe"><span>💸</span>Ausgabe</button>
       <button type="button" data-qa="einnahme"><span>💶</span>Einnahme / Erstattung</button>
       <button type="button" data-qa="fix"><span>🔁</span>Fixkosten</button>
       <button type="button" data-qa="einkommen"><span>💼</span>Einkommen</button>
+      <button type="button" data-qa="zahlung" class="span2"><span>↩️</span>Zahlung zu Schuld / Forderung<small>z. B. 2.000 € zurückgezahlt oder bekommen</small></button>
       <button type="button" data-qa="schuld"><span>📉</span>Schuld</button>
       <button type="button" data-qa="forderung"><span>📈</span>Bekomme ich zurück</button>
       <button type="button" data-qa="vermoegen"><span>🥇</span>Vermögen / Gold</button>
@@ -274,10 +303,12 @@
   </dialog>
 
   <datalist id="shopList"></datalist>
+  <input type="file" id="scanInput" accept="image/*" capture="environment" hidden>
   <div id="toast" class="toast" hidden></div>
   <script src="config.js"></script>
   <script src="core.js"></script>
   <script src="cloud.js"></script>
+  <script src="receipt.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

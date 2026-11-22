@@ -8,12 +8,16 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
 - **Bedienung** – oben eine Leiste mit allen Bereichen nebeneinander (am Handy wischbar): Übersicht · Kosten ·
   Auswertung · Schulden · Forderungen · Vermögen & Gold · Zekât · Geburtstage · Haushalt. Unter **Kosten** schaltet
   man zwischen **Einkommen | Fixkosten | Variabel** um.
+- **Kassenbon scannen** – Foto vom Bon machen (＋ → „📷 Kassenbon scannen“ oder im Ausgabe-Formular): Die App liest
+  **Betrag, Geschäft, Datum** und schlägt die **Kategorie** vor; das Foto hängt als Beleg dran. Man prüft die farbig
+  markierten Felder und speichert. Die Texterkennung läuft komplett auf dem Handy (kostenlos, ohne weiteres Konto).
 - **Schnell eintragen und austragen** – das runde **＋** unten rechts öffnet auf jeder Seite ein Menü (Ausgabe,
   Einnahme, Fixkosten, Einkommen, Schuld, Forderung, Vermögen, Geburtstag). Das **−** an jedem Eintrag löscht ihn –
   immer erst nach einer Rückfrage.
 - **Fixkosten** – einmal eintragen, zählen automatisch, bis man sie ändert: monatliche jeden Monat; vierteljährliche,
   halbjährliche und jährliche wahlweise mit vollem Betrag im Monat der Fälligkeit (mit Datum) oder auf die Monate verteilt
-  (Hausabtrag, Versicherungen, Abos …). Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag
+  (Hausabtrag, Versicherungen, Abos …). Mit **„Läuft bis“** (z. B. 06/2027) hören Fixkosten, Budgets und Einkommen
+  nach diesem Monat automatisch auf. Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag
   und seinen **Anteil in %** an.
 - **Budgets** – Obergrenzen für variable Ausgaben (z. B. Einkaufen 450 €). Ausgaben derselben Kategorie werden damit
   verrechnet: unter Budget = gespart, darüber = kostet extra.
@@ -26,7 +30,9 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
   - **Schulden** – was ich noch zurückzahlen muss (Kredite, Ratenkäufe, geliehenes Geld): Gesamtbetrag,
     monatliche Rate, Fälligkeit. Mit „± Eintragen“ erfasst man Teilzahlungen (Betrag wird kleiner) oder
     weiteres geliehenes Geld (Betrag wird größer). Offener Betrag, Verlauf und Restlaufzeit werden automatisch berechnet.
-    Die Rate kann optional automatisch bei den Fixkosten mitgezählt werden.
+    Mit **„🔁 Rate jeden Monat automatisch abziehen“** wird die Rate ab einem Datum jeden Monat abgezogen (bei Schulden
+    als Fixkosten, bei Forderungen als Einnahme) – bis zum „bis“-Datum oder bis alles bezahlt ist; **„Rate ausrechnen“**
+    verteilt den Betrag bis zum Datum. Zahlungen gehen auch schnell über **＋ → „Zahlung zu Schuld / Forderung“**.
   - **Forderungen** – was ich zurückbekomme: wer, wie viel, was schon zurückgezahlt wurde – ebenfalls mit
     Teil-Rückzahlungen und „noch mehr verliehen“.
   - **Geburtstage & Geschenke** – sortiert nach dem nächsten Geburtstag, mit Alter, Geschenkidee, Budget,

@@ -67,5 +67,26 @@ const assert = require('assert/strict');
   assert.equal((await as(A, `select * from storage.objects`)).length, 1);
   assert.equal((await as(B, `delete from storage.objects returning 1`)).length, 0);
   assert.equal((await pg.query(`select count(*)::int n from storage.buckets where id='belege'`)).rows[0].n, 1);
+  // Nutzer-Übersicht: nur für den Besitzer, ohne Inhalte
+  await assert.rejects(as(A, `select * from public.admin_overview()`), /Nur für den Besitzer/);
+  await assert.rejects(as(A, `select public.make_admin('a@x')`), /permission denied/, 'nicht aus der App');
+  await assert.rejects(as(null, `select public.make_admin('a@x')`), /permission denied/);
+  await assert.rejects(as(A, `select * from public.app_admins`), /permission denied/);
+  assert.match((await pg.query(`select public.make_admin('A@X') as r`)).rows[0].r, /Fertig/); // im SQL Editor (als Besitzer der Datenbank)
+  await assert.rejects(pg.query(`select public.make_admin('gibtsnicht@x')`), /Kein Konto/);
+  assert.equal((await as(A, `select public.is_admin() as a`))[0].a, true);
+  assert.equal((await as(B, `select public.is_admin() as a`))[0].a, false);
+  await as(B, `select public.mark_active()`);
+  const ov = await as(A, `select * from public.admin_overview()`);
+  assert.deepEqual(ov.map((r) => r.email).sort(), ['a@x', 'b@x', 'c@x']);
+  const rowB = ov.find((r) => r.email === 'b@x');
+  assert.equal(rowB.name, 'Partnerin');
+  assert.equal(rowB.household, 'Familie K');
+  assert.equal(rowB.household_members, 2);
+  assert.ok(rowB.last_seen_at, 'zuletzt aktiv gesetzt');
+  assert.deepEqual(Object.keys(rowB).sort(), ['confirmed', 'email', 'household', 'household_members', 'last_saved_at', 'last_seen_at', 'last_sign_in_at', 'name', 'registered_at'], 'keine Inhalte');
+  assert.ok(!JSON.stringify(ov).includes('AAA'), 'gespeicherte Daten tauchen nicht auf');
+  await assert.rejects(as(B, `select * from public.admin_overview()`), /Nur für den Besitzer/);
+  await assert.rejects(as(null, `select * from public.admin_overview()`), /permission denied/);
   console.log('Alle RLS-Prüfungen bestanden.');
 })().catch((e) => { console.error(e); process.exit(1); });

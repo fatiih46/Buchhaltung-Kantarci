@@ -30,7 +30,12 @@
           async signUp(p) { const r = await call({ kind: 'signUp', ...p }); if (r.data?.session) localStorage.setItem(KEY, JSON.stringify(r.data.session)); return r; },
           async signInWithPassword(p) { const r = await call({ kind: 'signIn', ...p }); if (r.data?.session) localStorage.setItem(KEY, JSON.stringify(r.data.session)); return r; },
           async signOut() { localStorage.setItem(KEY, 'null'); return { error: null }; },
-          async updateUser(p) { return call({ kind: 'updateUser', uid: uid(), ...p }); },
+          async updateUser(p) {
+            const r = await call({ kind: 'updateUser', uid: uid(), ...p });
+            const s = session();
+            if (s && r.data?.user) { s.user = r.data.user; localStorage.setItem(KEY, JSON.stringify(s)); }
+            return r;
+          },
           async resetPasswordForEmail(email, o) { return call({ kind: 'reset', email, redirectTo: o.redirectTo }); },
           onAuthStateChange() { return { data: { subscription: { unsubscribe() {} } } }; },
         },

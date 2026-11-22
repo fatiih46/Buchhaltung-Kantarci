@@ -14,6 +14,12 @@ function parseAmount(v) {
   return Number(t) || 0;
 }
 const INTERVAL_LABEL = { 1: 'monatlich', 3: 'vierteljährlich', 6: 'halbjährlich', 12: 'jährlich' };
+const fmtMonth = (ym) => (ym ? `${ym.slice(5, 7)}/${ym.slice(0, 4)}` : '');
+// Feld „Läuft bis“ für Fixkosten, Budgets und Einkommen
+const endMonthInput = (v) => `<label>Läuft bis <span class="muted">(optional)</span>
+  <input type="month" name="end_month" value="${v || ''}" placeholder="z. B. 06/2027"></label>
+  <div class="hint">Leer lassen = läuft weiter. Sonst zählt der Betrag nach diesem Monat nicht mehr (z. B. Kredit bis 06/2027).</div>`;
+const endInfo = (x) => (x.end_month ? (x.ended ? ` · <span class="neg">beendet ${fmtMonth(x.end_month)}</span>` : ` · bis ${fmtMonth(x.end_month)}`) : '');
 
 const state = {
   me: null,
@@ -106,11 +112,16 @@ $('#registerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   const join = f.get('mode') === 'join';
+  // vor dem Anlegen des Kontos: Hinweis zur Nutzung bestätigen
+  if (!noticeOkInSession && !(await showNotice({ confirmText: 'Verstanden – Konto erstellen', cancel: true }))) return;
+  noticeOkInSession = true;
   try {
     await api('POST', '/api/register', {
       name: f.get('name'), email: f.get('email'), password: f.get('password'),
       inviteCode: join ? f.get('inviteCode') : '', householdName: join ? '' : f.get('householdName'),
+      acceptedNotice: true,
     });
+    noticeJustAccepted = true;
     e.target.reset();
     history.replaceState(null, '', location.pathname);
     state.tab = 'kosten';
@@ -131,6 +142,33 @@ $('#forgotPw').addEventListener('click', async () => {
     authMessage({ info: true, message: 'Wir haben dir eine E-Mail geschickt. Tippe auf den Link darin und lege danach ein neues Passwort fest.' });
   } catch (err) { authMessage(err); }
 });
+// ---------- Hinweis zur Nutzung ----------
+let noticeJustAccepted = false;
+let noticeOkInSession = false; // bei mehreren Versuchen (z. B. Tippfehler im Code) nicht jedes Mal fragen
+function showNotice({ confirmText = 'Verstanden', cancel = false } = {}) {
+  const d = $('#noticeDlg');
+  $('#noticeOk').textContent = confirmText;
+  $('#noticeCancel').hidden = !cancel;
+  d.showModal();
+  $('.notice-text', d).scrollTop = 0;
+  return new Promise((resolve) => {
+    const done = (ok) => { d.close(); $('#noticeOk').onclick = $('#noticeCancel').onclick = d.oncancel = null; resolve(ok); };
+    $('#noticeOk').onclick = () => done(true);
+    $('#noticeCancel').onclick = () => done(false);
+    d.oncancel = (e) => { e.preventDefault(); if (cancel) done(false); }; // ohne „Abbrechen“ nur mit „Verstanden“ schließen
+  });
+}
+const noticeKey = () => `hinweis-gelesen-${state.me.user.id}`;
+function noticeSeen() {
+  if (state.me.noticeAccepted) return true;
+  try { return localStorage.getItem(noticeKey()) === '1'; } catch { return false; }
+}
+async function rememberNotice() {
+  try { localStorage.setItem(noticeKey(), '1'); } catch { /* privates Fenster */ }
+  if (window.Cloud?.enabled) await api('POST', '/api/notice').catch(() => {});
+}
+$('#showNotice').addEventListener('click', () => showNotice());
+
 function authMessage(err) {
   $('#authError').textContent = err.message;
   $('#authError').classList.toggle('info', !!err.info);
@@ -148,7 +186,7 @@ function switchTab(tab) {
   $$('[data-view]').forEach((s) => { s.hidden = s.dataset.view !== view; });
   // gewählten Bereich in der Leiste sichtbar machen (am Handy wird sie seitlich gewischt)
   const btn = $(`.topnav [data-tab="${tab}"]`);
-  if (btn) btn.scrollIntoView({ block: 'nearest', inline: 'center' });
+  if (btn) btn.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
   render();
   window.scrollTo(0, 0);
 }
@@ -168,6 +206,9 @@ async function boot() {
   $('#app').hidden = false;
   $('#hhName').textContent = state.me.household.name;
   $('#hello').textContent = `Hallo ${state.me.user.name}`;
+  // bestehende Konten: Hinweis einmal anzeigen
+  if (noticeJustAccepted) { noticeJustAccepted = false; rememberNotice(); }
+  else if (!noticeSeen()) showNotice().then(rememberNotice);
   if (window.Cloud?.recovery) {
     setOldPasswordNeeded(false);
     history.replaceState(null, '', location.pathname);
@@ -280,22 +321,22 @@ async function renderKosten() {
   return renderPlan();
 }
 async function renderPlan() {
-  const [incomes, fixed] = await Promise.all([api('GET', '/api/incomes'), api('GET', `/api/fixed?month=${state.month}`)]);
+  const [incomes, fixed] = await Promise.all([api('GET', `/api/incomes?month=${state.month}`), api('GET', `/api/fixed?month=${state.month}`)]);
 
   $('#incomeList').innerHTML = incomes.length ? incomes.map((i) => `
     <li data-id="${i.id}">
-      <div class="main"><div class="title">${esc(i.name)}</div><div class="meta">${INTERVAL_LABEL[i.interval]}</div></div>
-      <div class="right num">${fmt(i.amount)}${i.interval > 1 ? `<div class="meta">${fmt(i.amount / i.interval)} / Monat</div>` : ''}</div>
+      <div class="main"><div class="title">${esc(i.name)}</div><div class="meta">${INTERVAL_LABEL[i.interval]}${endInfo(i)}</div></div>
+      <div class="right num ${i.ended ? 'muted' : ''}">${fmt(i.amount)}${i.interval > 1 ? `<div class="meta">${fmt(i.amount / i.interval)} / Monat</div>` : ''}</div>
       ${delBtn(`/api/incomes/${i.id}`, i.name)}
     </li>`).join('') : '<li class="muted small">Noch kein Einkommen eingetragen.</li>';
-  $('#incomeTotal').textContent = fmt(incomes.reduce((s, i) => s + i.amount / i.interval, 0));
+  $('#incomeTotal').textContent = fmt(incomes.filter((i) => !i.ended).reduce((s, i) => s + i.amount / i.interval, 0));
   $$('#incomeList li[data-id]').forEach((li) => li.addEventListener('click', () =>
     openIncomeDialog(incomes.find((i) => i.id === Number(li.dataset.id)))));
 
   const groups = {};
   for (const f of fixed) (groups[f.category] ||= []).push(f);
   const monthly = (f) => f.thisMonth;
-  const rightSide = (f) => f.dueMode
+  const rightSide = (f) => f.ended ? `<span class="muted">0,00 €</span><div class="meta">beendet</div>` : f.dueMode
     ? (f.dueNow ? `${fmt(f.thisMonth)}<div class="meta">diesen Monat fällig</div>` : `<span class="muted">0,00 €</span><div class="meta">diesen Monat</div>`)
     : `${fmt(f.thisMonth)}<div class="meta">/ Monat</div>`;
   $('#fixedList').innerHTML = fixed.length ? Object.entries(groups).map(([cat, items]) => `
@@ -304,7 +345,7 @@ async function renderPlan() {
       <li data-id="${f.id}">
         <div class="main">
           <div class="title">${esc(f.name)} ${f.kind === 'budget' ? '<span class="pill budget">Budget</span>' : ''}</div>
-          <div class="meta">${fmt(f.amount)} ${INTERVAL_LABEL[f.interval]}${f.share < 100 ? ` · dein Anteil ${f.share.toLocaleString('de-DE')} %` : ''}</div>
+          <div class="meta">${fmt(f.amount)} ${INTERVAL_LABEL[f.interval]}${f.share < 100 ? ` · dein Anteil ${f.share.toLocaleString('de-DE')} %` : ''}${endInfo(f)}</div>
           ${f.dueMode && f.nextDue ? `<div class="meta">📅 nächste Fälligkeit ${fmtDate(f.nextDue)}</div>` : ''}
           ${!f.dueMode && f.interval > 1 && f.kind !== 'budget' ? '<div class="meta">auf die Monate verteilt</div>' : ''}
         </div>
@@ -441,7 +482,45 @@ $('#copyInvite').addEventListener('click', async () => {
 // ---------- Konto ----------
 function renderAccount() {
   $('#accountInfo').textContent = `${state.me.user.name} · ${state.me.user.email} · Haushalt „${state.me.household.name}“ (${state.me.members.map((m) => m.name).join(', ')})`;
+  $('#adminCard').hidden = !state.me.isAdmin;
+  if (state.me.isAdmin) renderAdmin();
 }
+// ---------- Nutzer-Übersicht (nur Besitzer, ohne Inhalte) ----------
+const DAY = 86400000;
+function agoText(iso) {
+  if (!iso) return 'noch nie';
+  const days = Math.floor((Date.now() - new Date(iso)) / DAY);
+  if (days <= 0) return 'heute';
+  if (days === 1) return 'gestern';
+  if (days < 30) return `vor ${days} Tagen`;
+  return new Date(iso).toLocaleDateString('de-DE');
+}
+async function renderAdmin() {
+  let rows;
+  try { rows = await api('GET', '/api/admin/users'); } catch (err) { $('#adminList').innerHTML = `<li class="muted small">${esc(err.message)}</li>`; return; }
+  const lastActive = (r) => [r.last_seen_at, r.last_saved_at, r.last_sign_in_at].filter(Boolean).sort().pop() || null;
+  const activeWithin = (days) => rows.filter((r) => { const t = lastActive(r); return t && Date.now() - new Date(t) <= days * DAY; }).length;
+  const households = new Set(rows.map((r) => r.household).filter(Boolean)).size;
+  $('#adminStats').innerHTML = `
+    <div><small>Konten</small><strong>${rows.length}</strong></div>
+    <div><small>Aktiv (7 Tage)</small><strong class="pos">${activeWithin(7)}</strong></div>
+    <div><small>Aktiv (30 Tage)</small><strong>${activeWithin(30)}</strong></div>
+    <div><small>Haushalte</small><strong>${households}</strong></div>`;
+  $('#adminList').innerHTML = rows.length ? rows.map((r) => {
+    const t = lastActive(r);
+    const fresh = t && Date.now() - new Date(t) <= 7 * DAY;
+    return `<li>
+      <span class="dot ${fresh ? 'on' : ''}" aria-hidden="true"></span>
+      <div class="grow">
+        <div class="title">${esc(r.name || '(noch nicht eingerichtet)')}</div>
+        <div class="meta">${esc(r.email)}${r.confirmed ? '' : ' · <span class="neg">E-Mail nicht bestätigt</span>'}</div>
+        <div class="meta">${r.household ? `🏠 ${esc(r.household)}${r.household_members > 1 ? ` (${r.household_members} Personen)` : ''} · ` : ''}registriert ${new Date(r.registered_at).toLocaleDateString('de-DE')}</div>
+      </div>
+      <div class="right small">zuletzt aktiv<div class="${fresh ? 'pos' : 'muted'}"><strong>${agoText(t)}</strong></div></div>
+    </li>`;
+  }).join('') : '<li class="muted small">Noch niemand registriert.</li>';
+}
+$('#adminReload').addEventListener('click', renderAdmin);
 function setOldPasswordNeeded(needed) {
   $('#oldPwLabel').hidden = !needed;
   $('#pwForm [name=oldPassword]').required = needed;
@@ -457,16 +536,29 @@ $('#pwForm').addEventListener('submit', async (e) => {
 });
 // ---------- „＋“ unten rechts: Schnell eintragen ----------
 const QUICK = {
+  scan: () => $('#scanInput').click(),
   ausgabe: () => openEntryDialog({ kind: 'mehr' }),
   einnahme: () => openEntryDialog({ kind: 'weniger' }),
   fix: () => openFixedDialog(),
   einkommen: () => openIncomeDialog(),
+  zahlung: async () => {
+    const open = (await api('GET', '/api/debts')).filter((d) => !d.done);
+    if (!open.length) { toast('Noch keine offenen Schulden oder Forderungen – erst über ＋ „Schuld“ oder „Bekomme ich zurück“ anlegen.'); return; }
+    openPaymentDialog(open[0], open);
+  },
   schuld: () => openDebtDialog({ direction: 'schuld' }),
   forderung: () => openDebtDialog({ direction: 'forderung' }),
   vermoegen: () => openAssetDialog(),
   geburtstag: () => openBirthdayDialog(),
 };
 $('#fab').addEventListener('click', () => $('#quickDlg').showModal());
+$('#scanInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  openEntryDialog({ kind: 'mehr' });
+  scanInto($('#dlgBody'), file);
+});
 $('#quickClose').addEventListener('click', () => $('#quickDlg').close());
 $('#quickDlg').addEventListener('click', (e) => {
   if (e.target === $('#quickDlg')) { $('#quickDlg').close(); return; } // Tipp neben das Menü schließt es
@@ -545,7 +637,8 @@ function openIncomeDialog(item) {
     title: item ? 'Einkommen bearbeiten' : 'Einkommen hinzufügen',
     html: `
       <label>Bezeichnung <input name="name" required maxlength="120" value="${esc(item?.name)}" placeholder="z. B. Gehalt netto, Kindergeld"></label>
-      <div class="row2">${amountInput(item?.amount)}${intervalSelect(item?.interval)}</div>`,
+      <div class="row2">${amountInput(item?.amount)}${intervalSelect(item?.interval)}</div>
+      ${endMonthInput(item?.end_month)}`,
     onSave: (d) => item ? api('PUT', `/api/incomes/${item.id}`, d) : api('POST', '/api/incomes', d),
     onDelete: item && (() => api('DELETE', `/api/incomes/${item.id}`)),
   });
@@ -575,7 +668,8 @@ function openFixedDialog(item) {
       </fieldset>
       <label>Mein Anteil (%) <input name="share" inputmode="decimal" value="${item?.share ?? 100}"></label>
       <div class="hint">Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) den Gesamtbetrag eintragen und 50 % wählen.
-        Bei einem Budget werden deine Ausgaben derselben Kategorie damit verrechnet.</div>`,
+        Bei einem Budget werden deine Ausgaben derselben Kategorie damit verrechnet.</div>
+      ${endMonthInput(item?.end_month)}`,
     onOpen: (root) => {
       const EVERY = { 3: 'alle 3 Monate', 6: 'alle 6 Monate', 12: 'jedes Jahr' };
       const update = () => {
@@ -622,6 +716,10 @@ function openEntryDialog(item = {}) {
   openDialog({
     title: isEdit ? 'Eintrag bearbeiten' : (kind === 'mehr' ? 'Neue Ausgabe' : 'Einnahme / Erstattung'),
     html: `
+      ${isEdit ? '' : `<div class="scan-box">
+        <label class="btn scan-btn">📷 Kassenbon scannen<input type="file" accept="image/*" capture="environment" data-scan hidden></label>
+        <div class="muted small" data-scan-status>Betrag, Geschäft und Datum werden automatisch eingetragen – du prüfst und speicherst.</div>
+      </div>`}
       <fieldset>
         <legend>Art</legend>
         <label class="radio"><input type="radio" name="kind" value="mehr" ${kind === 'mehr' ? 'checked' : ''}> Ausgabe</label>
@@ -645,6 +743,11 @@ function openEntryDialog(item = {}) {
         const hit = shopCache.find((x) => x.shop.toLowerCase() === shop.value.trim().toLowerCase());
         if (hit?.category) sel.value = hit.category;
       });
+      $('[data-scan]', body)?.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (file) scanInto(body, file);
+      });
     },
     onSave: async (d) => {
       if (isEdit) return api('PUT', `/api/entries/${item.id}`, d);
@@ -653,6 +756,87 @@ function openEntryDialog(item = {}) {
     },
     onDelete: isEdit && (() => api('DELETE', `/api/entries/${item.id}`)),
   });
+}
+
+// ---------- Kassenbon scannen: Texterkennung direkt auf dem Handy (Tesseract), danach bestätigen ----------
+let ocrWorker = null;
+let ocrProgress = null; // Rückmeldung in Prozent an das gerade offene Formular
+function loadScriptOnce(src) {
+  loadScriptOnce.cache ||= {};
+  return (loadScriptOnce.cache[src] ||= new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src; el.onload = resolve;
+    el.onerror = () => { delete loadScriptOnce.cache[src]; reject(new Error('Texterkennung konnte nicht geladen werden.')); };
+    document.head.appendChild(el);
+  }));
+}
+// wird einmal geladen und danach wiederverwendet (Sprachdaten speichert der Browser zwischen)
+async function getOcrWorker() {
+  await loadScriptOnce('vendor/tesseract/tesseract.min.js');
+  if (!ocrWorker) {
+    const base = new URL('vendor/tesseract/', location.href).href;
+    ocrWorker = Tesseract.createWorker('deu', 1, {
+      workerPath: base + 'worker.min.js', corePath: base, langPath: base, gzip: true,
+      logger: (m) => { if (m.status === 'recognizing text' && ocrProgress) ocrProgress(Math.round(m.progress * 100)); },
+    }).catch((err) => { ocrWorker = null; throw err; });
+  }
+  return ocrWorker;
+}
+// Foto für die Erkennung verkleinern (schneller, gleiche Genauigkeit)
+async function ocrImage(file) {
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    return c;
+  } catch { return file; }
+}
+async function readReceipt(file, onProgress) {
+  ocrProgress = onProgress;
+  try {
+    const worker = await getOcrWorker();
+    const { data } = await worker.recognize(await ocrImage(file));
+    return HaushaltReceipt.parseReceipt(data.text);
+  } finally { ocrProgress = null; }
+}
+async function scanInto(root, file) {
+  const status = $('[data-scan-status]', root);
+  // Foto gleich als Beleg anhängen
+  file.url = URL.createObjectURL(file);
+  pendingFiles.push(file);
+  $('.att-pick', root)?.redraw?.();
+  status.className = 'small scan-status busy';
+  status.textContent = 'Kassenbon wird gelesen … (beim ersten Mal dauert es etwas länger)';
+  let r;
+  try {
+    r = await readReceipt(file, (p) => { if (root.isConnected) status.textContent = `Kassenbon wird gelesen … ${p} %`; });
+  } catch (err) {
+    if (!root.isConnected) return;
+    status.className = 'small scan-status warn';
+    status.textContent = `⚠️ ${err.message || 'Texterkennung hat nicht geklappt.'} Bitte selbst eintragen – das Foto ist als Beleg angehängt.`;
+    return;
+  }
+  if (!root.isConnected) return; // Formular wurde inzwischen geschlossen
+  const mark = (el) => { el.classList.add('auto-filled'); el.addEventListener('input', () => el.classList.remove('auto-filled'), { once: true }); };
+  const found = [];
+  if (r.amount != null) {
+    const el = $('[name=amount]', root);
+    el.value = r.amount.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    mark(el); found.push('Betrag');
+  }
+  if (r.shop) { const el = $('[name=shop]', root); el.value = r.shop; mark(el); found.push('Geschäft'); }
+  if (r.date) { const el = $('[name=date]', root); el.value = r.date; mark(el); found.push('Datum'); }
+  if (r.category) { const el = $('[name=category]', root); el.value = r.category; mark(el); }
+  if (found.length) {
+    status.className = 'small scan-status ok';
+    status.textContent = `✅ Erkannt: ${found.join(', ')}. Bitte prüfen (farbig markiert) und auf „Speichern“ tippen.`;
+  } else {
+    status.className = 'small scan-status warn';
+    status.textContent = '⚠️ Auf dem Foto konnte nichts sicher erkannt werden. Bitte selbst eintragen – das Foto ist als Beleg angehängt.';
+  }
+  if (r.amount == null) $('[name=amount]', root).focus();
 }
 
 // ---------- Schulden, Forderungen, Geburtstage ----------
@@ -713,7 +897,7 @@ async function renderLists() {
   const debts = all.filter((d) => d.direction === state.list).sort((a, b) => a.done - b.done);
   const isDebt = state.list === 'schuld';
   const open = debts.reduce((s, d) => s + Math.max(0, d.remaining), 0);
-  const paid = debts.reduce((s, d) => s + d.paid, 0);
+  const paid = debts.reduce((s, d) => s + d.paid + d.autoPaid, 0);
   const rates = debts.filter((d) => !d.done).reduce((s, d) => s + d.monthly_rate, 0);
   $('#listSummary').innerHTML = debts.length ? `<div class="summary-row">
       <div><small>Noch offen</small><strong class="${isDebt ? 'neg' : 'pos'}">${fmt(open)}</strong></div>
@@ -722,9 +906,10 @@ async function renderLists() {
     </div>` : '';
   $('#listEmpty').hidden = debts.length > 0;
   $('#listBody').innerHTML = debts.map((d) => {
-    const pct = Math.min(100, (d.paid / d.total) * 100);
+    const pct = Math.min(100, ((d.paid + d.autoPaid) / d.total) * 100);
     const meta = [
-      d.monthly_rate > 0 && !d.done ? `Rate ${fmt(d.monthly_rate)}/Monat${d.monthsLeft ? ` · noch ca. ${d.monthsLeft} Monat${d.monthsLeft === 1 ? '' : 'e'}` : ''}` : '',
+      d.auto_pay && d.monthly_rate > 0 && !d.done ? `🔁 ${fmt(d.monthly_rate)} jeden Monat automatisch${d.autoEnd ? ` bis ${fmtMonth(d.autoEnd)}` : ''}${d.autoMonths ? ` · schon ${d.autoMonths}× (${fmt(d.autoPaid)})` : ' · startet ' + fmtDate(d.start_date)}` : '',
+      !d.auto_pay && d.monthly_rate > 0 && !d.done ? `Rate ${fmt(d.monthly_rate)}/Monat${d.monthsLeft ? ` · noch ca. ${d.monthsLeft} Monat${d.monthsLeft === 1 ? '' : 'e'}` : ''}` : '',
       d.due_date && !d.done ? `fällig ${fmtDate(d.due_date)}` : '',
       d.in_budget && !d.done ? 'zählt bei Fixkosten' : '',
     ].filter(Boolean).join(' · ');
@@ -766,11 +951,16 @@ function openDebtDialog(item) {
         <label>Rate / Monat (€) <input name="monthly_rate" inputmode="decimal" value="${item.monthly_rate ? String(item.monthly_rate).replace('.', ',') : ''}" placeholder="optional"></label>
       </div>
       <div class="row2">
-        <label>Seit <input type="date" name="start_date" value="${esc(v('start_date'))}"></label>
-        <label>Fällig bis <input type="date" name="due_date" value="${esc(v('due_date'))}"></label>
+        <label>Seit / ab wann <input type="date" name="start_date" value="${esc(v('start_date'))}"></label>
+        <label>${isDebt ? 'Zurückzahlen bis' : 'Zurück bis'} <input type="date" name="due_date" value="${esc(v('due_date'))}"></label>
       </div>
-      ${isDebt ? `<label class="check"><input type="checkbox" name="in_budget" ${item.in_budget ? 'checked' : ''}> Monatliche Rate bei Fixkosten mitrechnen</label>
-      <div class="hint">Nur anhaken, wenn du die Rate nicht schon unter „Kosten → Fixkosten“ eingetragen hast.</div>` : ''}
+      <button type="button" class="btn small" data-calc-rate>🧮 Rate ausrechnen (Betrag bis zum Datum verteilen)</button>
+      <label class="check"><input type="checkbox" name="auto_pay" ${item.auto_pay ? 'checked' : ''}> 🔁 Rate jeden Monat automatisch abziehen</label>
+      <div class="hint">${isDebt
+        ? 'Ab „Seit / ab wann“ wird die Rate jeden Monat von der Schuld abgezogen und zählt bei deinen Fixkosten – bis „Zurückzahlen bis“ oder bis alles bezahlt ist. Sonderzahlungen trägst du mit „± Eintragen“ ein.'
+        : 'Ab „Seit / ab wann“ wird die Rate jeden Monat als zurückbekommen gezählt (als Einnahme) – bis „Zurück bis“ oder bis alles zurück ist.'}</div>
+      ${isDebt ? `<label class="check" data-in-budget><input type="checkbox" name="in_budget" ${item.in_budget ? 'checked' : ''}> Monatliche Rate bei Fixkosten mitrechnen (ohne automatisch abzuziehen)</label>
+      <div class="hint" data-in-budget>Nur anhaken, wenn du die Rate nicht schon unter „Kosten → Fixkosten“ eingetragen hast.</div>` : ''}
       <label>Notiz <input name="note" maxlength="300" value="${esc(v('note'))}"></label>
       ${!isEdit ? `<label class="check"><input type="checkbox" name="book">
         ${isDebt ? 'Ich habe das Geld bekommen – als Einnahme buchen' : 'Das Geld ist von mir weggegangen – als Ausgabe buchen'}</label>
@@ -784,13 +974,34 @@ function openDebtDialog(item) {
           <span class="num ${p.type === 'erhoehung' ? '' : 'pos'}">${p.type === 'erhoehung' ? '+' : '−'}${fmt(p.amount)} <button type="button" class="x-btn" data-del-payment="${p.id}" aria-label="Eintrag löschen">×</button></span>
           ${attWidget('debt_payment', p.id, '', true)}
         </li>`).join('')}</ul>` : ''}`,
-    onOpen: (body) => body.addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-del-payment]');
-      if (!btn || !confirm('Diesen Eintrag löschen?')) return;
-      await api('DELETE', `/api/payments/${btn.dataset.delPayment}`);
-      btn.closest('li').remove();
-      render();
-    }),
+    onOpen: (body) => {
+      // „automatisch abziehen“ ersetzt „bei Fixkosten mitrechnen“
+      const syncAuto = () => {
+        const auto = $('[name=auto_pay]', body).checked;
+        $$('[data-in-budget]', body).forEach((el) => { el.hidden = auto; });
+      };
+      $('[name=auto_pay]', body).addEventListener('change', syncAuto);
+      syncAuto();
+      body.addEventListener('click', async (e) => {
+        if (e.target.closest('[data-calc-rate]')) {
+          const due = $('[name=due_date]', body).value;
+          if (!due) { toast('Bitte zuerst „bis“-Datum eintragen.'); return; }
+          const from = $('[name=start_date]', body).value || todayIso();
+          const months = (Number(due.slice(0, 4)) * 12 + Number(due.slice(5, 7))) - (Number(from.slice(0, 4)) * 12 + Number(from.slice(5, 7))) + 1;
+          const base = isEdit ? Math.max(0, item.total - item.paid) : parseAmount($('[name=amount]', body).value);
+          if (!base || months < 1) { toast('Bitte Betrag und gültige Daten eintragen.'); return; }
+          const rate = Math.ceil((base / months) * 100) / 100;
+          $('[name=monthly_rate]', body).value = rate.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          toast(`${fmt(base)} in ${months} Monat${months === 1 ? '' : 'en'} = ${fmt(rate)} pro Monat`);
+          return;
+        }
+        const btn = e.target.closest('[data-del-payment]');
+        if (!btn || !confirm('Diesen Eintrag löschen?')) return;
+        await api('DELETE', `/api/payments/${btn.dataset.delPayment}`);
+        btn.closest('li').remove();
+        render();
+      });
+    },
     onSave: async (d) => {
       if (isEdit) return api('PUT', `/api/debts/${item.id}`, d);
       const { id } = await api('POST', '/api/debts', d);
@@ -800,17 +1011,22 @@ function openDebtDialog(item) {
   });
 }
 
-function openPaymentDialog(debt) {
+// choices: Liste offener Schulden/Forderungen – dann kann man oben auswählen, wofür die Zahlung ist
+function openPaymentDialog(debt, choices = null) {
   const isDebt = debt.direction === 'schuld';
-  const suggest = debt.monthly_rate > 0 && debt.remaining > 0 ? Math.min(debt.monthly_rate, debt.remaining) : null;
+  const suggest = debt.monthly_rate > 0 && debt.remaining > 0 && !debt.auto_pay ? Math.min(debt.monthly_rate, debt.remaining) : null;
   const L = isDebt
     ? { zahlung: 'Ich habe zurückgezahlt', zahlungHint: 'Schuld wird kleiner', erhoehung: 'Ich habe mir mehr geliehen', erhoehungHint: 'Schuld wird größer',
         bookZ: 'Als Ausgabe in diesem Monat buchen', bookE: 'Als Einnahme buchen (ich habe das Geld bekommen)' }
     : { zahlung: 'Ich habe Geld zurückbekommen', zahlungHint: 'Forderung wird kleiner', erhoehung: 'Ich habe weiteres Geld verliehen', erhoehungHint: 'Forderung wird größer',
         bookZ: 'Als Einnahme in diesem Monat buchen', bookE: 'Als Ausgabe buchen (das Geld ist weg)' };
   openDialog({
-    title: `${debt.person}${debt.title ? ' – ' + debt.title : ''}`,
+    title: choices ? 'Zahlung eintragen' : `${debt.person}${debt.title ? ' – ' + debt.title : ''}`,
     html: `
+      ${choices ? `<label>Wofür? <select name="debt_pick">${['schuld', 'forderung'].map((dir) => {
+        const list = choices.filter((c) => c.direction === dir);
+        return list.length ? `<optgroup label="${dir === 'schuld' ? 'Meine Schulden' : 'Bekomme ich zurück'}">${list.map((c) => `<option value="${c.id}" ${c.id === debt.id ? 'selected' : ''}>${esc(c.person)}${c.title ? ' – ' + esc(c.title) : ''} (offen ${fmt(c.remaining)})</option>`).join('')}</optgroup>` : '';
+      }).join('')}</select></label>` : ''}
       <p class="muted small" style="margin:0">Aktuell offen: <strong>${fmt(debt.remaining)}</strong></p>
       <fieldset>
         <legend>Was ist passiert?</legend>
@@ -827,6 +1043,16 @@ function openPaymentDialog(debt) {
       <div class="hint" id="newTotal"></div>
       ${filePicker('Beleg / Quittung (optional)')}`,
     onOpen: (body) => {
+      // andere Schuld/Forderung gewählt: Formular für diese neu öffnen (Betrag und Datum bleiben)
+      $('[name=debt_pick]', body)?.addEventListener('change', (e) => {
+        const next = choices.find((c) => c.id === Number(e.target.value));
+        const keep = { amount: $('[name=amount]', body).value, date: $('[name=date]', body).value };
+        dlg.close();
+        openPaymentDialog(next, choices);
+        if (keep.amount) $('#dlgBody [name=amount]').value = keep.amount;
+        $('#dlgBody [name=date]').value = keep.date;
+        $('#dlgBody [name=amount]').dispatchEvent(new Event('input', { bubbles: true }));
+      });
       const update = () => {
         const type = $('[name=type]:checked', body).value;
         const amt = parseAmount($('[name=amount]', body).value);
@@ -1142,6 +1368,7 @@ function setupFilePicker(root) {
       <div class="att-thumb">${f.type.startsWith('image/') ? `<img src="${f.url}" alt="">` : `<span class="att-pdf">📄<small>${esc(f.name)}</small></span>`}
         <button type="button" class="att-del" data-pending-del="${i}" aria-label="Entfernen">×</button></div>`).join('');
   };
+  box.redraw = draw;
   box.addEventListener('change', (e) => {
     if (!e.target.classList.contains('pick-input')) return;
     for (const f of e.target.files) { f.url = URL.createObjectURL(f); pendingFiles.push(f); }

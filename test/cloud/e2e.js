@@ -62,7 +62,17 @@ function staticServer() {
   await fatih.fill('#registerForm [name=password]', 'geheim123');
   await fatih.fill('#registerForm [name=householdName]', 'Familie Kantarci');
   await fatih.click('#registerForm button[type=submit]');
+  await fatih.waitForSelector('#noticeDlg[open]');
+  assert.match(await fatih.textContent('#noticeDlg'), /eigene Verantwortung/);
+  await fatih.waitForTimeout(300);
+  await shot(fatih, 'cloud-14-hinweis.png');
+  await fatih.click('#noticeCancel');
+  assert.equal(backend.users.has('fatih@example.com'), false, 'Abbrechen legt kein Konto an');
+  await fatih.click('#registerForm button[type=submit]');
+  await fatih.click('#noticeOk');
   await fatih.waitForSelector('#app:not([hidden])');
+  assert.ok(backend.users.get('fatih@example.com').meta.accepted_notice, 'Bestätigung gespeichert');
+  assert.equal(await fatih.isVisible('#noticeDlg'), false, 'nach der Registrierung nicht noch einmal');
   const me = await api(fatih, 'GET', '/api/me');
   assert.equal(me.household.name, 'Familie Kantarci');
   assert.equal(me.user.name, 'Fatih');
@@ -140,6 +150,7 @@ function staticServer() {
   await frau.fill('#registerForm [name=email]', 'frau@example.com');
   await frau.fill('#registerForm [name=password]', 'geheim456');
   await frau.click('#registerForm button[type=submit]');
+  await frau.click('#noticeOk');
   await frau.waitForSelector('#app:not([hidden])');
   assert.equal(new URL(frau.url()).search, '', 'Code aus der Adresse entfernt');
   assert.equal(new URL(frau.url()).pathname, '/app/', 'bleibt im Unterordner');
@@ -163,6 +174,39 @@ function staticServer() {
     return (await sbc.storage.from('belege').createSignedUrls(paths, 60)).data.map((x) => x.signedUrl);
   }, (await userDb('fatih@example.com')).db.exec('select file_path from attachments')[0].values.map((v) => v[0]));
   assert.deepEqual(leak, [null, null]);
+
+  // ---------- 6b. Nutzer-Übersicht nur für den Besitzer, Hinweis für bestehende Konten ----------
+  await frau.click('[data-tab=account]');
+  await frau.waitForSelector('section[data-view=account]:not([hidden])');
+  assert.equal(await frau.isVisible('#adminCard'), false, 'Partnerin sieht keine Übersicht');
+  assert.match(await apiErr(frau, 'GET', '/api/admin/users'), /Nur für den Besitzer/);
+  await backend.pg.query(`select public.make_admin('fatih@example.com')`);
+  await fatih.reload();
+  await fatih.waitForSelector('#app:not([hidden])');
+  await fatih.click('[data-tab=account]');
+  await fatih.waitForSelector('#adminList li .title');
+  const adminText = await fatih.textContent('#adminCard');
+  assert.ok(adminText.includes('Fatih') && adminText.includes('Partnerin') && adminText.includes('frau@example.com'), adminText);
+  assert.ok(!/€/.test(await fatih.textContent('#adminList')), 'keine Beträge in der Übersicht');
+  assert.match(await fatih.textContent('#adminStats'), /Konten\s*2/);
+  assert.match(await fatih.textContent('#adminStats'), /Aktiv \(7 Tage\)\s*2/);
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-15-nutzer-uebersicht.png');
+  await fatih.click('.topnav [data-tab=overview]');
+  // bestehendes Konto ohne Bestätigung: Hinweis erscheint einmal, „Verstanden“ wird gespeichert
+  backend.users.get('frau@example.com').meta.accepted_notice = null;
+  await frau.evaluate(() => { const s = JSON.parse(localStorage.getItem('fake-sb-session')); s.user.user_metadata.accepted_notice = null; localStorage.setItem('fake-sb-session', JSON.stringify(s)); Object.keys(localStorage).filter((k) => k.startsWith('hinweis-')).forEach((k) => localStorage.setItem(k, '0')); });
+  await frau.reload();
+  await frau.waitForSelector('#noticeDlg[open]');
+  assert.equal(await frau.isVisible('#noticeCancel'), false, 'bestehende Konten: nur „Verstanden“');
+  await frau.click('#noticeOk');
+  await frau.waitForFunction(() => !document.querySelector('#noticeDlg').open);
+  await frau.waitForTimeout(300);
+  assert.ok(backend.users.get('frau@example.com').meta.accepted_notice, 'gespeichert');
+  await frau.reload();
+  await frau.waitForSelector('#app:not([hidden])');
+  await frau.waitForTimeout(300);
+  assert.equal(await frau.isVisible('#noticeDlg'), false, 'danach nicht mehr');
 
   // ---------- 7. Zweites Gerät von Fatih: gleichzeitige Änderungen gehen nicht verloren ----------
   const handy = await newPage('handy');
@@ -211,8 +255,8 @@ function staticServer() {
   assert.ok(fv[1].includes('800,00') && fv[2].includes('476,69') && fv[3].includes('1.276,69'), 'Fix/Variabel-Summen: ' + fv);
   // Navigation oben: Kosten mit Umschalter
   await fatih.click('.topnav [data-tab=kosten]');
-  await fatih.waitForSelector('[data-kostenview=einkommen]:not([hidden])'); // nach der Registrierung: Einkommen zuerst
-  assert.equal(await fatih.isVisible('[data-kostenview=fix]'), false);
+  await fatih.waitForSelector('[data-kostenview=fix]:not([hidden])'); // nach dem Neuladen: Fixkosten zuerst
+  assert.equal(await fatih.isVisible('[data-kostenview=einkommen]'), false);
   await fatih.click('[data-kosten=einkommen]');
   await fatih.waitForSelector('#incomeList li[data-id]');
   await fatih.click('[data-kosten=variabel]');
@@ -278,6 +322,95 @@ function staticServer() {
   await fatih.click(await minusSel());
   await fatih.waitForFunction(() => !document.querySelector('#entryList').textContent.includes('Kiosk'));
   assert.equal(await fatih.isVisible('#dlg'), false);
+  // Kassenbon scannen: echte Texterkennung auf einem erzeugten Bon-Foto, danach bestätigen
+  const bonPage = await browser.newPage({ viewport: { width: 640, height: 560 } });
+  await bonPage.setContent(`<body style="margin:0;background:#fff"><pre style="font:26px/1.45 'DejaVu Sans Mono',monospace;color:#111;padding:24px;margin:0">
+     REWE Markt GmbH
+   Musterstrasse 5, Stuttgart
+
+Milch 3,5%            1,19
+Vollkornbrot          2,49
+Gouda Kaese           3,99
+--------------------------
+SUMME EUR             7,67
+Geg. EC-Karte         7,67
+
+20.11.2026      18:04
+</pre></body>`);
+  const bonPng = await bonPage.screenshot();
+  await bonPage.close();
+  await fatih.click('#fab');
+  await fatih.waitForSelector('#quickDlg[open]');
+  const [chooser] = await Promise.all([fatih.waitForEvent('filechooser'), fatih.click('[data-qa=scan]')]);
+  assert.equal(await fatih.isVisible('#quickDlg'), false, 'Menü geschlossen');
+  await chooser.setFiles({ name: 'kassenbon.png', mimeType: 'image/png', buffer: bonPng });
+  await fatih.waitForSelector('#dlg[open] [data-scan-status]');
+  await fatih.waitForFunction(() => /Erkannt|nichts sicher|nicht geklappt|nicht geladen/.test(document.querySelector('[data-scan-status]').textContent), null, { timeout: 180000 });
+  const scanStatus = await fatih.textContent('[data-scan-status]');
+  assert.match(scanStatus, /Erkannt: Betrag, Geschäft, Datum/, scanStatus);
+  assert.equal(await fatih.inputValue('#dlgBody [name=amount]'), '7,67');
+  assert.equal(await fatih.inputValue('#dlgBody [name=shop]'), 'Rewe');
+  assert.equal(await fatih.inputValue('#dlgBody [name=date]'), '2026-11-20');
+  assert.equal(await fatih.inputValue('#dlgBody [name=category]'), 'Einkaufen & Lebensmittel');
+  assert.equal((await fatih.$$('#dlgBody .auto-filled')).length, 4, 'erkannte Felder markiert');
+  assert.equal((await fatih.$$('#dlgBody [data-pending] .att-thumb')).length, 1, 'Foto als Beleg angehängt');
+  await shot(fatih, 'cloud-11-kassenbon-erkannt.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  const scanned = (await api(fatih, 'GET', '/api/entries?month=2026-11')).find((e) => e.amount === 7.67);
+  assert.ok(scanned && scanned.shop === 'Rewe' && scanned.date === '2026-11-20' && scanned.files === 1, JSON.stringify(scanned));
+  // Laufzeiten: Schuld mit „Rate ausrechnen“ und automatisch abziehen
+  const nowD = new Date();
+  const ymOff = (off) => { const d = new Date(nowD.getFullYear(), nowD.getMonth() + off, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=schuld]');
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=person]', 'Autohaus');
+  await fatih.fill('#dlgBody [name=title]', 'Autokredit');
+  await fatih.fill('#dlgBody [name=amount]', '1.200');
+  await fatih.fill('#dlgBody [name=start_date]', `${ymOff(0)}-01`);
+  await fatih.fill('#dlgBody [name=due_date]', `${ymOff(11)}-28`);
+  await fatih.click('#dlgBody [data-calc-rate]');
+  assert.equal(await fatih.inputValue('#dlgBody [name=monthly_rate]'), '100,00', '1.200 € auf 12 Monate');
+  assert.equal(await fatih.isVisible('#dlgBody [data-in-budget]'), true);
+  await fatih.check('#dlgBody [name=auto_pay]');
+  assert.equal(await fatih.isVisible('#dlgBody [data-in-budget]'), false, 'automatisch ersetzt „bei Fixkosten mitrechnen“');
+  await fatih.waitForTimeout(300);
+  await shot(fatih, 'cloud-12-schuld-automatisch.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  const autoDebt = (await api(fatih, 'GET', '/api/debts')).find((x) => x.person === 'Autohaus');
+  assert.ok(autoDebt.auto_pay && autoDebt.monthly_rate === 100 && autoDebt.autoMonths === 1 && autoDebt.remaining === 1100, JSON.stringify(autoDebt));
+  assert.equal(autoDebt.autoEnd, ymOff(11));
+  await fatih.click('.topnav [data-tab=schuld]');
+  await fatih.waitForFunction(() => document.querySelector('#listBody').textContent.includes('jeden Monat automatisch'));
+  // Fixkosten mit „Läuft bis“
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=fix]');
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=name]', 'Fitnessstudio');
+  await fatih.selectOption('#dlgBody [name=category]', 'Freizeit');
+  await fatih.fill('#dlgBody [name=amount]', '30');
+  await fatih.fill('#dlgBody [name=end_month]', ymOff(1));
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  const fit = (await api(fatih, 'GET', `/api/fixed?month=${ymOff(2)}`)).find((f) => f.name === 'Fitnessstudio');
+  assert.ok(fit.end_month === ymOff(1) && fit.ended && fit.thisMonth === 0, JSON.stringify(fit));
+  // ＋ → „Zahlung zu Schuld / Forderung“: Ahmet hat 100 € zurückgezahlt
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=zahlung]');
+  await fatih.waitForSelector('#dlg[open] [name=debt_pick]');
+  await fatih.fill('#dlgBody [name=amount]', '100');
+  const ahmet = (await api(fatih, 'GET', '/api/debts')).find((x) => x.person === 'Ahmet');
+  await fatih.selectOption('#dlgBody [name=debt_pick]', String(ahmet.id));
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody').textContent.includes('zurückbekommen'));
+  assert.equal(await fatih.inputValue('#dlgBody [name=amount]'), '100', 'Betrag bleibt beim Umschalten');
+  await fatih.waitForTimeout(300); // Einblenden abwarten
+  await shot(fatih, 'cloud-13-zahlung-plus.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  assert.equal((await api(fatih, 'GET', '/api/debts')).find((x) => x.person === 'Ahmet').remaining, ahmet.remaining - 100);
+  await fatih.click('.topnav [data-tab=kosten]');
   // „−“ auch bei Fixkosten, Einkommen, Schulden, Vermögen, Geburtstagen
   await fatih.click('[data-kosten=fix]');
   await fatih.waitForSelector('#fixedList .del-btn');
@@ -320,6 +453,7 @@ function staticServer() {
   await neu.check('#registerForm input[value=join]');
   await neu.fill('#registerForm [name=inviteCode]', 'FALSCH22');
   await neu.click('#registerForm button[type=submit]');
+  await neu.click('#noticeOk');
   await neu.waitForFunction(() => document.querySelector('#authError').textContent.includes('Einladungscode'));
   await neu.fill('#registerForm [name=inviteCode]', me.household.inviteCode.toLowerCase());
   await neu.click('#registerForm button[type=submit]');

@@ -179,3 +179,61 @@ create policy "belege_insert_own" on storage.objects
   for insert to authenticated with check (bucket_id = 'belege' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "belege_delete_own" on storage.objects
   for delete to authenticated using (bucket_id = 'belege' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ---------- Nutzer-Übersicht für den Besitzer (ohne Inhalte) ----------
+-- Wer darf die Übersicht sehen? Einmalig im SQL Editor eintragen (nicht über die App möglich):
+--   select public.make_admin('deine@email.de');
+alter table public.members add column if not exists last_seen_at timestamptz;
+
+create table if not exists public.app_admins (
+  user_id uuid primary key references auth.users (id) on delete cascade
+);
+alter table public.app_admins enable row level security; -- keine Policies: aus der App weder lesbar noch änderbar
+revoke all on public.app_admins from anon, authenticated;
+
+create or replace function public.is_admin()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.app_admins where user_id = auth.uid())
+$$;
+
+-- „zuletzt aktiv“: die App meldet sich beim Öffnen kurz (nur Zeitpunkt, keine Inhalte)
+create or replace function public.mark_active()
+returns void language sql volatile security definer set search_path = public as $$
+  update public.members set last_seen_at = now() where user_id = auth.uid()
+$$;
+
+-- Liste aller Konten – nur Name, E-Mail, Haushalt und Zeitpunkte, keine Einträge oder Beträge
+create or replace function public.admin_overview()
+returns table (name text, email text, household text, household_members integer, registered_at timestamptz,
+               last_sign_in_at timestamptz, last_seen_at timestamptz, last_saved_at timestamptz, confirmed boolean)
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'Nur für den Besitzer.'; end if;
+  return query
+    select m.name, u.email::text, h.name,
+           (select count(*)::integer from public.members m2 where m2.household_id = m.household_id),
+           u.created_at, u.last_sign_in_at, m.last_seen_at, d.updated_at, (u.email_confirmed_at is not null)
+    from auth.users u
+    left join public.members m on m.user_id = u.id
+    left join public.households h on h.id = m.household_id
+    left join public.user_data d on d.user_id = u.id
+    order by coalesce(m.last_seen_at, d.updated_at, u.last_sign_in_at, u.created_at) desc;
+end $$;
+
+create or replace function public.make_admin(p_email text)
+returns text language plpgsql volatile security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  select id into v_id from auth.users where lower(email) = lower(trim(p_email));
+  if not found then raise exception 'Kein Konto mit dieser E-Mail gefunden.'; end if;
+  insert into public.app_admins (user_id) values (v_id) on conflict do nothing;
+  return 'Fertig: ' || p_email || ' sieht jetzt die Nutzer-Übersicht.';
+end $$;
+
+revoke all on function public.is_admin() from public, anon;
+revoke all on function public.mark_active() from public, anon;
+revoke all on function public.admin_overview() from public, anon;
+revoke all on function public.make_admin(text) from public, anon, authenticated;
+grant execute on function public.is_admin() to authenticated;
+grant execute on function public.mark_active() to authenticated;
+grant execute on function public.admin_overview() to authenticated;
