@@ -315,6 +315,56 @@ Geg. EC-Karte         7,67
   await fatih.waitForSelector('#dlg', { state: 'hidden' });
   const scanned = (await api(fatih, 'GET', '/api/entries?month=2026-11')).find((e) => e.amount === 7.67);
   assert.ok(scanned && scanned.shop === 'Rewe' && scanned.date === '2026-11-20' && scanned.files === 1, JSON.stringify(scanned));
+  // Laufzeiten: Schuld mit „Rate ausrechnen“ und automatisch abziehen
+  const nowD = new Date();
+  const ymOff = (off) => { const d = new Date(nowD.getFullYear(), nowD.getMonth() + off, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=schuld]');
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=person]', 'Autohaus');
+  await fatih.fill('#dlgBody [name=title]', 'Autokredit');
+  await fatih.fill('#dlgBody [name=amount]', '1.200');
+  await fatih.fill('#dlgBody [name=start_date]', `${ymOff(0)}-01`);
+  await fatih.fill('#dlgBody [name=due_date]', `${ymOff(11)}-28`);
+  await fatih.click('#dlgBody [data-calc-rate]');
+  assert.equal(await fatih.inputValue('#dlgBody [name=monthly_rate]'), '100,00', '1.200 € auf 12 Monate');
+  assert.equal(await fatih.isVisible('#dlgBody [data-in-budget]'), true);
+  await fatih.check('#dlgBody [name=auto_pay]');
+  assert.equal(await fatih.isVisible('#dlgBody [data-in-budget]'), false, 'automatisch ersetzt „bei Fixkosten mitrechnen“');
+  await shot(fatih, 'cloud-12-schuld-automatisch.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  const autoDebt = (await api(fatih, 'GET', '/api/debts')).find((x) => x.person === 'Autohaus');
+  assert.ok(autoDebt.auto_pay && autoDebt.monthly_rate === 100 && autoDebt.autoMonths === 1 && autoDebt.remaining === 1100, JSON.stringify(autoDebt));
+  assert.equal(autoDebt.autoEnd, ymOff(11));
+  await fatih.click('.topnav [data-tab=schuld]');
+  await fatih.waitForFunction(() => document.querySelector('#listBody').textContent.includes('jeden Monat automatisch'));
+  // Fixkosten mit „Läuft bis“
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=fix]');
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=name]', 'Fitnessstudio');
+  await fatih.selectOption('#dlgBody [name=category]', 'Freizeit');
+  await fatih.fill('#dlgBody [name=amount]', '30');
+  await fatih.fill('#dlgBody [name=end_month]', ymOff(1));
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  const fit = (await api(fatih, 'GET', `/api/fixed?month=${ymOff(2)}`)).find((f) => f.name === 'Fitnessstudio');
+  assert.ok(fit.end_month === ymOff(1) && fit.ended && fit.thisMonth === 0, JSON.stringify(fit));
+  // ＋ → „Zahlung zu Schuld / Forderung“: Ahmet hat 100 € zurückgezahlt
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=zahlung]');
+  await fatih.waitForSelector('#dlg[open] [name=debt_pick]');
+  await fatih.fill('#dlgBody [name=amount]', '100');
+  const ahmet = (await api(fatih, 'GET', '/api/debts')).find((x) => x.person === 'Ahmet');
+  await fatih.selectOption('#dlgBody [name=debt_pick]', String(ahmet.id));
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody').textContent.includes('zurückbekommen'));
+  assert.equal(await fatih.inputValue('#dlgBody [name=amount]'), '100', 'Betrag bleibt beim Umschalten');
+  await shot(fatih, 'cloud-13-zahlung-plus.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  assert.equal((await api(fatih, 'GET', '/api/debts')).find((x) => x.person === 'Ahmet').remaining, ahmet.remaining - 100);
+  await fatih.click('.topnav [data-tab=kosten]');
   // „−“ auch bei Fixkosten, Einkommen, Schulden, Vermögen, Geburtstagen
   await fatih.click('[data-kosten=fix]');
   await fatih.waitForSelector('#fixedList .del-btn');

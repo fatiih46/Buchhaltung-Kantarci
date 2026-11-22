@@ -453,3 +453,67 @@ test('Fixkosten vierteljährlich/halbjährlich/jährlich: im Fälligkeitsmonat o
   await c('PUT', `/api/fixed/${kfz.id}`, { name: 'Kfz-Versicherung', category: 'Versicherungen', amount: '600', interval: 6, share: 50, due_mode: 'verteilt' });
   assert.equal(await fixed('2026-04'), 155.08 + 50 + 20);
 });
+
+test('Laufzeit: Fixkosten/Einkommen „läuft bis“, Schulden und Forderungen automatisch abziehen', async () => {
+  const c = client();
+  await c('POST', '/api/register', { name: 'Laufzeit', email: 'laufzeit@example.com', password: 'geheim123' });
+  const now = new Date();
+  const ym = (off) => { const d = new Date(now.getFullYear(), now.getMonth() + off, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const sum = async (off) => (await c('GET', `/api/summary?month=${ym(off)}`)).data;
+
+  // Fixkosten nur bis nächsten Monat, Einkommen nur bis diesen Monat
+  let r = await c('POST', '/api/fixed', { name: 'Leasing', category: 'Auto & Verschleiß', amount: '50', interval: 1, end_month: ym(1) });
+  assert.equal(r.status, 200);
+  await c('POST', '/api/incomes', { name: 'Elterngeld', amount: '800', interval: 1, end_month: ym(0) });
+  assert.equal((await sum(0)).fixedTotal, 50);
+  assert.equal((await sum(1)).fixedTotal, 50);
+  assert.equal((await sum(2)).fixedTotal, 0, 'nach dem Ende nicht mehr');
+  assert.equal((await sum(0)).income, 800);
+  assert.equal((await sum(1)).income, 0);
+  const fixedLater = (await c('GET', `/api/fixed?month=${ym(2)}`)).data[0];
+  assert.equal(fixedLater.ended, true);
+  assert.equal((await c('GET', `/api/incomes?month=${ym(1)}`)).data[0].ended, true);
+  // andere Schreibweisen und Fehler
+  await c('PUT', `/api/fixed/${fixedLater.id}`, { name: 'Leasing', category: 'Auto & Verschleiß', amount: '50', interval: 1, end_month: '06/2027' });
+  assert.equal((await c('GET', '/api/fixed')).data[0].end_month, '2027-06');
+  r = await c('POST', '/api/fixed', { name: 'X', category: 'Sonstiges', amount: '5', interval: 1, end_month: '13/2027' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /Läuft bis/);
+  await c('DELETE', `/api/fixed/${fixedLater.id}`);
+
+  // Schuld 1000 €, 300 €/Monat automatisch seit vor 2 Monaten -> 3 Raten (inkl. diesem Monat) = 900, offen 100
+  const start = `${ym(-2)}-01`;
+  r = await c('POST', '/api/debts', { direction: 'schuld', person: 'Bank', amount: '1000', monthly_rate: '300', start_date: start, auto_pay: 'on' });
+  const debtId = r.data.id;
+  let d = (await c('GET', '/api/debts')).data.find((x) => x.id === debtId);
+  assert.equal(d.autoMonths, 3);
+  assert.equal(d.autoPaid, 900);
+  assert.equal(d.remaining, 100);
+  assert.equal(d.autoEnd, ym(1), 'letzte (Teil-)Rate nächsten Monat');
+  assert.equal((await sum(0)).fixedTotal, 300, 'Rate zählt diesen Monat als Fixkosten');
+  assert.equal((await sum(1)).fixedTotal, 100, 'letzte Rate nur noch der Rest');
+  assert.equal((await sum(2)).fixedTotal, 0);
+  // Sonderzahlung von Hand: 50 -> nächster Monat nur noch 50
+  await c('POST', `/api/debts/${debtId}/payments`, { type: 'zahlung', date: `${ym(0)}-02`, amount: '50' });
+  d = (await c('GET', '/api/debts')).data.find((x) => x.id === debtId);
+  assert.equal(d.remaining, 50);
+  assert.equal((await sum(1)).fixedTotal, 50);
+
+  // mit Enddatum: 100 €/Monat ab diesem Monat bis in 2 Monaten -> nur 3 Raten, Rest bleibt offen
+  r = await c('POST', '/api/debts', { direction: 'schuld', person: 'Bruder', amount: '1000', monthly_rate: '100', start_date: `${ym(0)}-01`, due_date: `${ym(2)}-15`, auto_pay: 'on' });
+  d = (await c('GET', '/api/debts')).data.find((x) => x.id === r.data.id);
+  assert.equal(d.autoEnd, ym(2));
+  assert.equal(d.remaining, 900);
+  assert.equal((await sum(3)).fixedTotal, 0, 'nach dem Enddatum nichts mehr');
+
+  // Forderung: Ahmet zahlt mir 200 € im Monat zurück -> Einnahme/Erstattung
+  r = await c('POST', '/api/debts', { direction: 'forderung', person: 'Ahmet', amount: '2000', monthly_rate: '200', start_date: `${ym(0)}-05`, auto_pay: 'on' });
+  assert.equal((await sum(0)).refunds, 200);
+  d = (await c('GET', '/api/debts')).data.find((x) => x.id === r.data.id);
+  assert.equal(d.remaining, 1800);
+
+  // ohne Rate oder Startdatum geht automatisch nicht
+  r = await c('POST', '/api/debts', { direction: 'schuld', person: 'X', amount: '100', auto_pay: 'on' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /automatische/);
+});
