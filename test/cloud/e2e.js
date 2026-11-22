@@ -331,6 +331,7 @@ Geg. EC-Karte         7,67
   assert.equal(await fatih.isVisible('#dlgBody [data-in-budget]'), true);
   await fatih.check('#dlgBody [name=auto_pay]');
   assert.equal(await fatih.isVisible('#dlgBody [data-in-budget]'), false, 'automatisch ersetzt „bei Fixkosten mitrechnen“');
+  await fatih.waitForTimeout(300);
   await shot(fatih, 'cloud-12-schuld-automatisch.png');
   await fatih.click('#dlgForm button[type=submit]');
   await fatih.waitForSelector('#dlg', { state: 'hidden' });
@@ -360,6 +361,7 @@ Geg. EC-Karte         7,67
   await fatih.selectOption('#dlgBody [name=debt_pick]', String(ahmet.id));
   await fatih.waitForFunction(() => document.querySelector('#dlgBody').textContent.includes('zurückbekommen'));
   assert.equal(await fatih.inputValue('#dlgBody [name=amount]'), '100', 'Betrag bleibt beim Umschalten');
+  await fatih.waitForTimeout(300); // Einblenden abwarten
   await shot(fatih, 'cloud-13-zahlung-plus.png');
   await fatih.click('#dlgForm button[type=submit]');
   await fatih.waitForSelector('#dlg', { state: 'hidden' });

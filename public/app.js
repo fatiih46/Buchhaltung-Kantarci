@@ -154,7 +154,7 @@ function switchTab(tab) {
   $$('[data-view]').forEach((s) => { s.hidden = s.dataset.view !== view; });
   // gewählten Bereich in der Leiste sichtbar machen (am Handy wird sie seitlich gewischt)
   const btn = $(`.topnav [data-tab="${tab}"]`);
-  if (btn) btn.scrollIntoView({ block: 'nearest', inline: 'center' });
+  if (btn) btn.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
   render();
   window.scrollTo(0, 0);
 }
