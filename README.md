@@ -9,8 +9,8 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
   Auswertung · Schulden · Forderungen · Vermögen & Gold · Zekât · Geburtstage · Haushalt. Unter **Kosten** schaltet
   man zwischen **Einkommen | Fixkosten | Variabel** um.
 - **Fixkosten** – einmal eintragen, zählen automatisch, bis man sie ändert: monatliche jeden Monat; vierteljährliche,
-  halbjährliche und jährliche wahlweise mit vollem Betrag im Monat der Fälligkeit (mit Datum) oder auf die Monate verteilt. Hausabtrag, Versicherungen, Abos … Jahresbeträge werden automatisch
-  auf den Monat umgerechnet. Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag
+  halbjährliche und jährliche wahlweise mit vollem Betrag im Monat der Fälligkeit (mit Datum) oder auf die Monate verteilt
+  (Hausabtrag, Versicherungen, Abos …). Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag
   und seinen **Anteil in %** an.
 - **Budgets** – Obergrenzen für variable Ausgaben (z. B. Einkaufen 450 €). Ausgaben derselben Kategorie werden damit
   verrechnet: unter Budget = gespart, darüber = kostet extra.
