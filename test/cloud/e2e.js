@@ -62,7 +62,17 @@ function staticServer() {
   await fatih.fill('#registerForm [name=password]', 'geheim123');
   await fatih.fill('#registerForm [name=householdName]', 'Familie Kantarci');
   await fatih.click('#registerForm button[type=submit]');
+  await fatih.waitForSelector('#noticeDlg[open]');
+  assert.match(await fatih.textContent('#noticeDlg'), /eigene Verantwortung/);
+  await fatih.waitForTimeout(300);
+  await shot(fatih, 'cloud-14-hinweis.png');
+  await fatih.click('#noticeCancel');
+  assert.equal(backend.users.has('fatih@example.com'), false, 'Abbrechen legt kein Konto an');
+  await fatih.click('#registerForm button[type=submit]');
+  await fatih.click('#noticeOk');
   await fatih.waitForSelector('#app:not([hidden])');
+  assert.ok(backend.users.get('fatih@example.com').meta.accepted_notice, 'Bestätigung gespeichert');
+  assert.equal(await fatih.isVisible('#noticeDlg'), false, 'nach der Registrierung nicht noch einmal');
   const me = await api(fatih, 'GET', '/api/me');
   assert.equal(me.household.name, 'Familie Kantarci');
   assert.equal(me.user.name, 'Fatih');
@@ -140,6 +150,7 @@ function staticServer() {
   await frau.fill('#registerForm [name=email]', 'frau@example.com');
   await frau.fill('#registerForm [name=password]', 'geheim456');
   await frau.click('#registerForm button[type=submit]');
+  await frau.click('#noticeOk');
   await frau.waitForSelector('#app:not([hidden])');
   assert.equal(new URL(frau.url()).search, '', 'Code aus der Adresse entfernt');
   assert.equal(new URL(frau.url()).pathname, '/app/', 'bleibt im Unterordner');
@@ -163,6 +174,39 @@ function staticServer() {
     return (await sbc.storage.from('belege').createSignedUrls(paths, 60)).data.map((x) => x.signedUrl);
   }, (await userDb('fatih@example.com')).db.exec('select file_path from attachments')[0].values.map((v) => v[0]));
   assert.deepEqual(leak, [null, null]);
+
+  // ---------- 6b. Nutzer-Übersicht nur für den Besitzer, Hinweis für bestehende Konten ----------
+  await frau.click('[data-tab=account]');
+  await frau.waitForSelector('section[data-view=account]:not([hidden])');
+  assert.equal(await frau.isVisible('#adminCard'), false, 'Partnerin sieht keine Übersicht');
+  assert.match(await apiErr(frau, 'GET', '/api/admin/users'), /Nur für den Besitzer/);
+  await backend.pg.query(`select public.make_admin('fatih@example.com')`);
+  await fatih.reload();
+  await fatih.waitForSelector('#app:not([hidden])');
+  await fatih.click('[data-tab=account]');
+  await fatih.waitForSelector('#adminList li .title');
+  const adminText = await fatih.textContent('#adminCard');
+  assert.ok(adminText.includes('Fatih') && adminText.includes('Partnerin') && adminText.includes('frau@example.com'), adminText);
+  assert.ok(!/€/.test(await fatih.textContent('#adminList')), 'keine Beträge in der Übersicht');
+  assert.match(await fatih.textContent('#adminStats'), /Konten\s*2/);
+  assert.match(await fatih.textContent('#adminStats'), /Aktiv \(7 Tage\)\s*2/);
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-15-nutzer-uebersicht.png');
+  await fatih.click('.topnav [data-tab=overview]');
+  // bestehendes Konto ohne Bestätigung: Hinweis erscheint einmal, „Verstanden“ wird gespeichert
+  backend.users.get('frau@example.com').meta.accepted_notice = null;
+  await frau.evaluate(() => { const s = JSON.parse(localStorage.getItem('fake-sb-session')); s.user.user_metadata.accepted_notice = null; localStorage.setItem('fake-sb-session', JSON.stringify(s)); Object.keys(localStorage).filter((k) => k.startsWith('hinweis-')).forEach((k) => localStorage.setItem(k, '0')); });
+  await frau.reload();
+  await frau.waitForSelector('#noticeDlg[open]');
+  assert.equal(await frau.isVisible('#noticeCancel'), false, 'bestehende Konten: nur „Verstanden“');
+  await frau.click('#noticeOk');
+  await frau.waitForFunction(() => !document.querySelector('#noticeDlg').open);
+  await frau.waitForTimeout(300);
+  assert.ok(backend.users.get('frau@example.com').meta.accepted_notice, 'gespeichert');
+  await frau.reload();
+  await frau.waitForSelector('#app:not([hidden])');
+  await frau.waitForTimeout(300);
+  assert.equal(await frau.isVisible('#noticeDlg'), false, 'danach nicht mehr');
 
   // ---------- 7. Zweites Gerät von Fatih: gleichzeitige Änderungen gehen nicht verloren ----------
   const handy = await newPage('handy');
@@ -211,8 +255,8 @@ function staticServer() {
   assert.ok(fv[1].includes('800,00') && fv[2].includes('476,69') && fv[3].includes('1.276,69'), 'Fix/Variabel-Summen: ' + fv);
   // Navigation oben: Kosten mit Umschalter
   await fatih.click('.topnav [data-tab=kosten]');
-  await fatih.waitForSelector('[data-kostenview=einkommen]:not([hidden])'); // nach der Registrierung: Einkommen zuerst
-  assert.equal(await fatih.isVisible('[data-kostenview=fix]'), false);
+  await fatih.waitForSelector('[data-kostenview=fix]:not([hidden])'); // nach dem Neuladen: Fixkosten zuerst
+  assert.equal(await fatih.isVisible('[data-kostenview=einkommen]'), false);
   await fatih.click('[data-kosten=einkommen]');
   await fatih.waitForSelector('#incomeList li[data-id]');
   await fatih.click('[data-kosten=variabel]');
@@ -409,6 +453,7 @@ Geg. EC-Karte         7,67
   await neu.check('#registerForm input[value=join]');
   await neu.fill('#registerForm [name=inviteCode]', 'FALSCH22');
   await neu.click('#registerForm button[type=submit]');
+  await neu.click('#noticeOk');
   await neu.waitForFunction(() => document.querySelector('#authError').textContent.includes('Einladungscode'));
   await neu.fill('#registerForm [name=inviteCode]', me.household.inviteCode.toLowerCase());
   await neu.click('#registerForm button[type=submit]');

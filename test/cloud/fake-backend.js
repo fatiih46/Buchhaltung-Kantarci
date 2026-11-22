@@ -35,7 +35,7 @@ module.exports = async function createBackend(setupSql) {
         if (users.has(email)) return { data: { user: null, session: null }, error: { code: 'user_already_exists', message: 'User already registered' } };
         const u = { id: crypto.randomUUID(), email, password: op.password, meta: op.options?.data || {}, confirmed: !opts.confirmEmail };
         users.set(email, u);
-        await pg.query('insert into auth.users (id, email) values ($1, $2)', [u.id, email]);
+        await pg.query('insert into auth.users (id, email, email_confirmed_at) values ($1, $2, $3)', [u.id, email, u.confirmed ? new Date() : null]);
         return { data: { user: { id: u.id }, session: u.confirmed ? sess(u) : null }, error: null };
       }
       case 'signIn': {
@@ -50,16 +50,19 @@ module.exports = async function createBackend(setupSql) {
       }
       case 'updateUser': {
         const u = [...users.values()].find((x) => x.id === op.uid);
-        u.password = op.password;
-        return { data: {}, error: null };
+        if (op.password) u.password = op.password;
+        if (op.data) u.meta = { ...u.meta, ...op.data };
+        return { data: { user: sess(u).user }, error: null };
       }
       case 'rpc': {
         const keys = Object.keys(op.args || {});
         try {
+          // wie PostgREST: Funktionen mit Tabellen-Ergebnis liefern eine Liste, einfache Funktionen einen Wert
           const r = await as(op.uid, () => pg.query(
-            `select public.${ident(op.name)}(${keys.map((k, i) => `${ident(k)} := $${i + 1}`).join(', ')}) as r`,
+            `select * from public.${ident(op.name)}(${keys.map((k, i) => `${ident(k)} := $${i + 1}`).join(', ')})`,
             keys.map((k) => op.args[k])));
-          return { data: r.rows[0].r, error: null };
+          const cols = r.fields.map((f) => f.name);
+          return { data: cols.length === 1 && cols[0] === op.name ? (r.rows[0] ? r.rows[0][op.name] : null) : r.rows, error: null };
         } catch (e) { return err(e); }
       }
       case 'query': {

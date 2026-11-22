@@ -100,6 +100,19 @@ das in Ordnung; mit Bestätigung ist es etwas sicherer (niemand kann sich mit fr
 
 ---
 
+## Schritt 8 (optional): Nutzer-Übersicht für dich als Besitzer
+
+Unter ⚙ kannst du sehen, **wer die App nutzt** (Name, E-Mail, Haushalt, registriert am, zuletzt aktiv) –
+**ohne Inhalte**: keine Beträge, keine Einträge. Dafür einmalig im Supabase **SQL Editor** ausführen
+(deine eigene E-Mail-Adresse einsetzen):
+
+```sql
+select public.make_admin('deine@email.de');
+```
+
+Es erscheint „Fertig: … sieht jetzt die Nutzer-Übersicht.“ Danach die App neu laden → ⚙ → „👑 Wer nutzt die App?“.
+Aus der App heraus kann sich niemand selbst zum Besitzer machen.
+
 ## Gut zu wissen
 
 | Thema | |

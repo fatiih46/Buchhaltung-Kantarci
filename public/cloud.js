@@ -25,6 +25,7 @@
   let pendingRemovals = [];
   let queue = Promise.resolve();
   let summaryTimer = null;
+  let markedActive = false;
 
   // ---------- Hilfsfunktionen ----------
   function loadScript(src) {
@@ -251,7 +252,8 @@
     const { data, error } = await sb.auth.signUp({
       email, password,
       options: {
-        data: { name, invite_code: code || null, household_name: householdName || null },
+        data: { name, invite_code: code || null, household_name: householdName || null,
+          accepted_notice: body.acceptedNotice ? new Date().toISOString() : null },
         emailRedirectTo: location.origin + location.pathname,
       },
     });
@@ -281,11 +283,29 @@
       sb.from('members').select('user_id, name').order('created_at'),
     ]);
     if (hh.error || members.error) throw offline(hh.error || members.error);
+    // „zuletzt aktiv“ für die Nutzer-Übersicht des Besitzers (nur der Zeitpunkt), einmal pro Öffnen
+    if (!markedActive) { markedActive = true; sb.rpc('mark_active').then(() => {}, () => {}); }
+    const admin = await sb.rpc('is_admin');
     return {
       user: { id: auth.uid, name: member.name, email: auth.email },
       household: { name: hh.data.name, inviteCode: hh.data.invite_code },
       members: members.data.map((m) => ({ id: m.user_id, name: m.name })),
+      isAdmin: admin.data === true,
+      noticeAccepted: !!auth.meta.accepted_notice,
     };
+  }
+  async function acceptNotice() {
+    await requireAuth();
+    const { data, error } = await sb.auth.updateUser({ data: { accepted_notice: new Date().toISOString() } });
+    if (error) throw authError(error);
+    if (data && data.user) auth.meta = data.user.user_metadata || auth.meta;
+    return { ok: true };
+  }
+  async function adminUsers() {
+    await requireAuth();
+    const { data, error } = await sb.rpc('admin_overview');
+    if (error) throw new HttpError(403, /Besitzer/.test(error.message) ? 'Nur für den Besitzer.' : 'Übersicht nicht verfügbar – bitte supabase/setup.sql erneut ausführen.');
+    return data;
   }
   async function household(query) {
     await ensureData();
@@ -351,6 +371,8 @@
     if (path === '/api/logout' && method === 'POST') return logout();
     if (path === '/api/password' && method === 'POST') return changePassword(input);
     if (path === '/api/forgot' && method === 'POST') return forgotPassword(input);
+    if (path === '/api/notice' && method === 'POST') return acceptNotice();
+    if (path === '/api/admin/users') return adminUsers();
     if (path === '/api/me') return me();
     await ensureData();
     if (path === '/api/household') return household(u.searchParams);

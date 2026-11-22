@@ -390,3 +390,14 @@ dialog[open]::backdrop { animation: fade-in .16s ease-out; }
   .content > section:not([hidden]), dialog[open], dialog[open]::backdrop { animation: none; }
   .topnav { scroll-behavior: auto; }
 }
+
+/* Hinweis zur Nutzung */
+#noticeDlg { width: min(520px, calc(100vw - 2rem)); }
+#noticeDlg h2 { margin: 0 0 .5rem; }
+.notice-text { font-size: .92rem; line-height: 1.5; max-height: 60dvh; overflow-y: auto; overscroll-behavior: contain; margin-bottom: .9rem; }
+.notice-text p { margin: 0 0 .5rem; }
+.notice-text ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .45rem; }
+/* Nutzer-Übersicht */
+.dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--line); align-self: center; margin-right: .6rem; }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--primary-soft); }
+#adminList .right { text-align: right; }

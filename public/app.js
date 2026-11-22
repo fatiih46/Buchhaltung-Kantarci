@@ -112,11 +112,16 @@ $('#registerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   const join = f.get('mode') === 'join';
+  // vor dem Anlegen des Kontos: Hinweis zur Nutzung bestätigen
+  if (!noticeOkInSession && !(await showNotice({ confirmText: 'Verstanden – Konto erstellen', cancel: true }))) return;
+  noticeOkInSession = true;
   try {
     await api('POST', '/api/register', {
       name: f.get('name'), email: f.get('email'), password: f.get('password'),
       inviteCode: join ? f.get('inviteCode') : '', householdName: join ? '' : f.get('householdName'),
+      acceptedNotice: true,
     });
+    noticeJustAccepted = true;
     e.target.reset();
     history.replaceState(null, '', location.pathname);
     state.tab = 'kosten';
@@ -137,6 +142,33 @@ $('#forgotPw').addEventListener('click', async () => {
     authMessage({ info: true, message: 'Wir haben dir eine E-Mail geschickt. Tippe auf den Link darin und lege danach ein neues Passwort fest.' });
   } catch (err) { authMessage(err); }
 });
+// ---------- Hinweis zur Nutzung ----------
+let noticeJustAccepted = false;
+let noticeOkInSession = false; // bei mehreren Versuchen (z. B. Tippfehler im Code) nicht jedes Mal fragen
+function showNotice({ confirmText = 'Verstanden', cancel = false } = {}) {
+  const d = $('#noticeDlg');
+  $('#noticeOk').textContent = confirmText;
+  $('#noticeCancel').hidden = !cancel;
+  d.showModal();
+  $('.notice-text', d).scrollTop = 0;
+  return new Promise((resolve) => {
+    const done = (ok) => { d.close(); $('#noticeOk').onclick = $('#noticeCancel').onclick = d.oncancel = null; resolve(ok); };
+    $('#noticeOk').onclick = () => done(true);
+    $('#noticeCancel').onclick = () => done(false);
+    d.oncancel = (e) => { e.preventDefault(); if (cancel) done(false); }; // ohne „Abbrechen“ nur mit „Verstanden“ schließen
+  });
+}
+const noticeKey = () => `hinweis-gelesen-${state.me.user.id}`;
+function noticeSeen() {
+  if (state.me.noticeAccepted) return true;
+  try { return localStorage.getItem(noticeKey()) === '1'; } catch { return false; }
+}
+async function rememberNotice() {
+  try { localStorage.setItem(noticeKey(), '1'); } catch { /* privates Fenster */ }
+  if (window.Cloud?.enabled) await api('POST', '/api/notice').catch(() => {});
+}
+$('#showNotice').addEventListener('click', () => showNotice());
+
 function authMessage(err) {
   $('#authError').textContent = err.message;
   $('#authError').classList.toggle('info', !!err.info);
@@ -174,6 +206,9 @@ async function boot() {
   $('#app').hidden = false;
   $('#hhName').textContent = state.me.household.name;
   $('#hello').textContent = `Hallo ${state.me.user.name}`;
+  // bestehende Konten: Hinweis einmal anzeigen
+  if (noticeJustAccepted) { noticeJustAccepted = false; rememberNotice(); }
+  else if (!noticeSeen()) showNotice().then(rememberNotice);
   if (window.Cloud?.recovery) {
     setOldPasswordNeeded(false);
     history.replaceState(null, '', location.pathname);
@@ -447,7 +482,45 @@ $('#copyInvite').addEventListener('click', async () => {
 // ---------- Konto ----------
 function renderAccount() {
   $('#accountInfo').textContent = `${state.me.user.name} · ${state.me.user.email} · Haushalt „${state.me.household.name}“ (${state.me.members.map((m) => m.name).join(', ')})`;
+  $('#adminCard').hidden = !state.me.isAdmin;
+  if (state.me.isAdmin) renderAdmin();
 }
+// ---------- Nutzer-Übersicht (nur Besitzer, ohne Inhalte) ----------
+const DAY = 86400000;
+function agoText(iso) {
+  if (!iso) return 'noch nie';
+  const days = Math.floor((Date.now() - new Date(iso)) / DAY);
+  if (days <= 0) return 'heute';
+  if (days === 1) return 'gestern';
+  if (days < 30) return `vor ${days} Tagen`;
+  return new Date(iso).toLocaleDateString('de-DE');
+}
+async function renderAdmin() {
+  let rows;
+  try { rows = await api('GET', '/api/admin/users'); } catch (err) { $('#adminList').innerHTML = `<li class="muted small">${esc(err.message)}</li>`; return; }
+  const lastActive = (r) => [r.last_seen_at, r.last_saved_at, r.last_sign_in_at].filter(Boolean).sort().pop() || null;
+  const activeWithin = (days) => rows.filter((r) => { const t = lastActive(r); return t && Date.now() - new Date(t) <= days * DAY; }).length;
+  const households = new Set(rows.map((r) => r.household).filter(Boolean)).size;
+  $('#adminStats').innerHTML = `
+    <div><small>Konten</small><strong>${rows.length}</strong></div>
+    <div><small>Aktiv (7 Tage)</small><strong class="pos">${activeWithin(7)}</strong></div>
+    <div><small>Aktiv (30 Tage)</small><strong>${activeWithin(30)}</strong></div>
+    <div><small>Haushalte</small><strong>${households}</strong></div>`;
+  $('#adminList').innerHTML = rows.length ? rows.map((r) => {
+    const t = lastActive(r);
+    const fresh = t && Date.now() - new Date(t) <= 7 * DAY;
+    return `<li>
+      <span class="dot ${fresh ? 'on' : ''}" aria-hidden="true"></span>
+      <div class="grow">
+        <div class="title">${esc(r.name || '(noch nicht eingerichtet)')}</div>
+        <div class="meta">${esc(r.email)}${r.confirmed ? '' : ' · <span class="neg">E-Mail nicht bestätigt</span>'}</div>
+        <div class="meta">${r.household ? `🏠 ${esc(r.household)}${r.household_members > 1 ? ` (${r.household_members} Personen)` : ''} · ` : ''}registriert ${new Date(r.registered_at).toLocaleDateString('de-DE')}</div>
+      </div>
+      <div class="right small">zuletzt aktiv<div class="${fresh ? 'pos' : 'muted'}"><strong>${agoText(t)}</strong></div></div>
+    </li>`;
+  }).join('') : '<li class="muted small">Noch niemand registriert.</li>';
+}
+$('#adminReload').addEventListener('click', renderAdmin);
 function setOldPasswordNeeded(needed) {
   $('#oldPwLabel').hidden = !needed;
   $('#pwForm [name=oldPassword]').required = needed;
