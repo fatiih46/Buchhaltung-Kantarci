@@ -5,17 +5,24 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
 - **Eigene Konten** – jede Person meldet sich mit eigener E-Mail und eigenem Passwort an.
 - **Haushalt verbinden** – die erste Person legt den Haushalt an, die zweite tritt mit dem **Einladungscode** (oder dem Einladungslink aus „Haushalt → Kopieren“) bei.
 - **Einkommen** (Gehalt, Kindergeld …) – monatlich, vierteljährlich, halbjährlich oder jährlich.
-- **Fixkosten** – bleiben jeden Monat gleich: Hausabtrag, Versicherungen, Abos … Jahresbeträge werden automatisch
-  auf den Monat umgerechnet. Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag
+- **Bedienung** – oben eine Leiste mit allen Bereichen nebeneinander (am Handy wischbar): Übersicht · Kosten ·
+  Auswertung · Schulden · Forderungen · Vermögen & Gold · Zekât · Geburtstage · Haushalt. Unter **Kosten** schaltet
+  man zwischen **Einkommen | Fixkosten | Variabel** um.
+- **Schnell eintragen und austragen** – das runde **＋** unten rechts öffnet auf jeder Seite ein Menü (Ausgabe,
+  Einnahme, Fixkosten, Einkommen, Schuld, Forderung, Vermögen, Geburtstag). Das **−** an jedem Eintrag löscht ihn –
+  immer erst nach einer Rückfrage.
+- **Fixkosten** – einmal eintragen, zählen automatisch, bis man sie ändert: monatliche jeden Monat; vierteljährliche,
+  halbjährliche und jährliche wahlweise mit vollem Betrag im Monat der Fälligkeit (mit Datum) oder auf die Monate verteilt
+  (Hausabtrag, Versicherungen, Abos …). Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) gibt man den Gesamtbetrag
   und seinen **Anteil in %** an.
 - **Budgets** – Obergrenzen für variable Ausgaben (z. B. Einkaufen 450 €). Ausgaben derselben Kategorie werden damit
   verrechnet: unter Budget = gespart, darüber = kostet extra.
-- **Variable Ausgaben** (Reiter „Ausgaben“) – selbst eintragen mit Betrag, **Händler/Plattform** (PayPal, Vinted, eBay,
+- **Variable Ausgaben** (Kosten → Variabel) – selbst eintragen mit Betrag, **Händler/Plattform** (PayPal, Vinted, eBay,
   Amazon, Lidl …, mit Vorschlägen und automatischer Kategorie), Datum und Notiz. Dazu Einnahmen/Erstattungen
   (z. B. Vinted-Verkauf, Rücksendung).
 - **Auswertung & Sparpotenzial** – pro Monat: Ausgaben nach Händler, Budget vs. Ausgaben, Verlauf der letzten
   6 Monate, größte Ausgaben, Vergleich mit dem Durchschnitt, Kleinkäufe, Sparquote und konkrete Spartipps.
-- **Listen** (eigener Reiter):
+- **Listen** (jeweils eigener Bereich in der Leiste oben):
   - **Schulden** – was ich noch zurückzahlen muss (Kredite, Ratenkäufe, geliehenes Geld): Gesamtbetrag,
     monatliche Rate, Fälligkeit. Mit „± Eintragen“ erfasst man Teilzahlungen (Betrag wird kleiner) oder
     weiteres geliehenes Geld (Betrag wird größer). Offener Betrag, Verlauf und Restlaufzeit werden automatisch berechnet.
@@ -36,7 +43,7 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
   Zekât-Zahlung lassen sich beliebig viele Fotos oder PDFs hängen („📷 Foto aufnehmen“ öffnet am Handy direkt die
   Kamera, „🖼️ Galerie / PDF“ erlaubt mehrere auf einmal). Fotos werden automatisch verkleinert; ein 📎 in den Listen
   zeigt, wo Belege dranhängen. Belege sieht nur das eigene Konto.
-- **Übersicht** – Einkommen − Fixkosten − Mehrverbrauch + Wenigerverbrauch = **„Für mich verfügbar“**, mit Aufteilung nach Kategorie.
+- **Übersicht** – am Ende eine Tabelle **Fixkosten und variable Kosten** pro Kategorie mit Summen; dazu Einkommen − Fixkosten − Mehrverbrauch + Wenigerverbrauch = **„Für mich verfügbar“**, mit Aufteilung nach Kategorie.
 - **Haushaltsübersicht** – was jede Person und ihr gemeinsam noch übrig habt (die Details der anderen Person bleiben privat, nur Summen sind sichtbar).
 - CSV-Export (für Excel), Passwort ändern (⚙ oben rechts), Hell-/Dunkelmodus, auf dem Handy als App installierbar („Zum Home-Bildschirm“).
 

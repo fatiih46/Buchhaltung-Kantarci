@@ -183,6 +183,8 @@ function migrate() {
   if (!hasColumn('fixed_costs', 'kind')) db.exec("ALTER TABLE fixed_costs ADD COLUMN kind TEXT NOT NULL DEFAULT 'fix'");
   if (!hasColumn('debt_payments', 'type')) db.exec("ALTER TABLE debt_payments ADD COLUMN type TEXT NOT NULL DEFAULT 'zahlung'");
   if (!hasColumn('entries', 'shop')) db.exec("ALTER TABLE entries ADD COLUMN shop TEXT NOT NULL DEFAULT ''");
+  // Fixkosten alle 3/6/12 Monate: Datum einer Fälligkeit -> ganzer Betrag nur in den Fälligkeitsmonaten
+  if (!hasColumn('fixed_costs', 'due_date')) db.exec('ALTER TABLE fixed_costs ADD COLUMN due_date TEXT');
 
   // Belege (Fotos/PDFs) – beliebig viele pro Ausgabe, Schuld, Schulden-Zahlung, Zekât-Zahlung oder Vermögensposten
   // Ältere Datenbanken kennen 'asset' noch nicht: Tabelle einmalig mit erweiterter Prüfung neu aufbauen (Daten bleiben).
@@ -302,6 +304,36 @@ function bookEntry(userId, { date, kind, category, amount, note, shop = '' }) {
 }
 
 // ---------- Berechnungen ----------
+// ---------- Fixkosten: monatlich, verteilt oder im Fälligkeitsmonat ----------
+const monthIndex = (ym) => { const [y, m] = ym.split('-').map(Number); return y * 12 + (m - 1); };
+// wird im Fälligkeitsmonat abgezogen (nur Fixkosten mit Intervall > 1 und Datum)
+const isDueMode = (f) => f.kind !== 'budget' && f.interval > 1 && !!f.due_date;
+function isDueIn(f, month) {
+  if (!isDueMode(f)) return false;
+  const diff = monthIndex(month) - monthIndex(f.due_date.slice(0, 7));
+  return diff >= 0 && diff % f.interval === 0;
+}
+// Betrag (eigener Anteil), der in diesem Monat zählt
+function fixedAmountFor(f, month) {
+  const share = f.share / 100;
+  if (isDueMode(f)) return isDueIn(f, month) ? f.amount * share : 0;
+  return (f.amount / f.interval) * share;
+}
+// nächste Fälligkeit ab heute (Tag wird an kürzere Monate angepasst, z. B. 31. -> 30.)
+function nextDueDate(f, today = new Date()) {
+  if (!isDueMode(f)) return null;
+  const [y, m, d] = f.due_date.split('-').map(Number);
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  for (let i = 0; i < 1000; i++) {
+    const idx = y * 12 + (m - 1) + i * f.interval;
+    const yy = Math.floor(idx / 12), mm = (idx % 12) + 1;
+    const dd = Math.min(d, new Date(yy, mm, 0).getDate());
+    const iso = `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+    if (iso >= todayStr) return iso;
+  }
+  return null;
+}
+
 function summaryFor(userId, month) {
   const incomes = db.prepare('SELECT * FROM incomes WHERE user_id = ?').all(userId);
   const fixed = db.prepare('SELECT * FROM fixed_costs WHERE user_id = ?').all(userId);
@@ -310,9 +342,11 @@ function summaryFor(userId, month) {
   const income = round2(incomes.reduce((s, i) => s + i.amount / i.interval, 0));
   const cats = {};
   const cat = (name) => (cats[name] ||= { fixed: 0, budget: 0, spent: 0, refund: 0, count: 0 });
+  const dueThisMonth = [];
   for (const f of fixed) {
-    const monthly = (f.amount / f.interval) * (f.share / 100);
+    const monthly = fixedAmountFor(f, month);
     if (f.kind === 'budget') cat(f.category).budget += monthly; else cat(f.category).fixed += monthly;
+    if (isDueIn(f, month)) dueThisMonth.push({ name: f.name, amount: round2(monthly), interval: f.interval });
   }
   // Raten von Schulden, die "bei Fixkosten mitzählen" sollen (solange noch etwas offen ist)
   const debts = debtsFor(userId);
@@ -343,7 +377,7 @@ function summaryFor(userId, month) {
     budgetTotal: round2(budgetTotal), spent: round2(spent), budgetLeft: round2(budgetLeft), overBudget: round2(overBudget),
     refunds: round2(refunds),
     plannedAvailable: round2(income - fixedTotal - budgetTotal),
-    available, categories,
+    available, categories, dueThisMonth,
     debtsOpen: round2(debts.filter((d) => d.direction === 'schuld').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
     receivablesOpen: round2(debts.filter((d) => d.direction === 'forderung').reduce((s, d) => s + Math.max(0, d.remaining), 0)),
     zakatOpen: zakatFor(userId).totals.open,
@@ -487,17 +521,32 @@ route('DELETE', '/api/incomes/:id', ({ user, params }) => {
 
 // Fixkosten / Budgets
 const fixedKind = (v) => (v === 'budget' ? 'budget' : 'fix');
-route('GET', '/api/fixed', ({ user }) => db.prepare('SELECT * FROM fixed_costs WHERE user_id = ? ORDER BY category, name').all(user.id));
+route('GET', '/api/fixed', ({ user, query }) => {
+  const month = monthStr(query && query.get('month'));
+  return db.prepare('SELECT * FROM fixed_costs WHERE user_id = ? ORDER BY category, name').all(user.id).map((f) => ({
+    ...f, dueMode: isDueMode(f), thisMonth: round2(fixedAmountFor(f, month)), dueNow: isDueIn(f, month), nextDue: nextDueDate(f),
+  }));
+});
+// Fixkosten-Felder; bei 3/6/12 Monaten: due_mode „faellig“ (ganzer Betrag im Fälligkeitsmonat, Datum nötig) oder „verteilt“
+function fixedFields(body) {
+  const kind = fixedKind(body.kind);
+  const iv = interval(body.interval);
+  let due = null;
+  if (kind === 'fix' && iv > 1 && body.due_mode === 'faellig') {
+    if (!body.due_date) throw new HttpError(400, 'Bitte das Datum der nächsten Fälligkeit angeben.');
+    due = dateStr(body.due_date);
+  }
+  return [str(body.name, 'Bezeichnung'), category(body.category), num(body.amount, 'Betrag'),
+    iv, num(body.share ?? 100, 'Anteil', { min: 1, max: 100 }), kind, due];
+}
 route('POST', '/api/fixed', ({ user, body }) => {
-  db.prepare('INSERT INTO fixed_costs (user_id, name, category, amount, interval, share, kind) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(user.id, str(body.name, 'Bezeichnung'), category(body.category), num(body.amount, 'Betrag'),
-      interval(body.interval), num(body.share ?? 100, 'Anteil', { min: 1, max: 100 }), fixedKind(body.kind));
+  db.prepare('INSERT INTO fixed_costs (name, category, amount, interval, share, kind, due_date, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(...fixedFields(body), user.id);
   return { ok: true };
 });
 route('PUT', '/api/fixed/:id', ({ user, body, params }) => {
-  const r = db.prepare('UPDATE fixed_costs SET name = ?, category = ?, amount = ?, interval = ?, share = ?, kind = ? WHERE id = ? AND user_id = ?')
-    .run(str(body.name, 'Bezeichnung'), category(body.category), num(body.amount, 'Betrag'),
-      interval(body.interval), num(body.share ?? 100, 'Anteil', { min: 1, max: 100 }), fixedKind(body.kind), params.id, user.id);
+  const r = db.prepare('UPDATE fixed_costs SET name = ?, category = ?, amount = ?, interval = ?, share = ?, kind = ?, due_date = ? WHERE id = ? AND user_id = ?')
+    .run(...fixedFields(body), params.id, user.id);
   if (!r.changes) throw new HttpError(404, 'Nicht gefunden.');
   return { ok: true };
 });
@@ -705,7 +754,7 @@ function exportCsv(userId) {
   for (const i of db.prepare('SELECT * FROM incomes WHERE user_id = ?').all(userId))
     rows.push(['Einkommen', i.name, '', i.amount, i.interval, '', '']);
   for (const f of db.prepare('SELECT * FROM fixed_costs WHERE user_id = ?').all(userId))
-    rows.push([f.kind === 'budget' ? 'Budget' : 'Fixkosten', f.name, f.category, f.amount, f.interval, f.share, '', '']);
+    rows.push([f.kind === 'budget' ? 'Budget' : 'Fixkosten', f.name, f.category, f.amount, f.interval, f.share, f.due_date || '', '']);
   for (const e of db.prepare('SELECT * FROM entries WHERE user_id = ? ORDER BY date').all(userId))
     rows.push([e.kind === 'mehr' ? 'Ausgabe' : 'Einnahme/Erstattung', e.note, e.category, e.amount, '', '', e.date, e.shop]);
   rows.push([], ['Typ', 'Person', 'Bezeichnung', 'Betrag gesamt', 'Zurückgezahlt', 'Offen', 'Rate/Monat', 'Fällig']);

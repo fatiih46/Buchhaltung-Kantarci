@@ -21,6 +21,7 @@ const state = {
   month: new Date().toISOString().slice(0, 7),
   tab: 'overview',
   list: 'schuld',
+  kosten: 'fix',
 };
 
 // ---------- API ----------
@@ -112,7 +113,8 @@ $('#registerForm').addEventListener('submit', async (e) => {
     });
     e.target.reset();
     history.replaceState(null, '', location.pathname);
-    state.tab = 'plan';
+    state.tab = 'kosten';
+    state.kosten = 'einkommen';
     await boot();
     toast('Willkommen! Trag zuerst dein Einkommen und deine Fixkosten ein.');
   } catch (err) {
@@ -136,10 +138,17 @@ function authMessage(err) {
 
 // ---------- Navigation ----------
 $$('[data-tab]').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+// Schulden, Forderungen, Vermögen, Zekât und Geburtstage teilen sich eine Ansicht
+const LIST_TABS = ['schuld', 'forderung', 'vermoegen', 'zekat', 'geburtstag'];
 function switchTab(tab) {
   state.tab = tab;
+  if (LIST_TABS.includes(tab)) state.list = tab;
+  const view = LIST_TABS.includes(tab) ? 'lists' : tab;
   $$('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  $$('[data-view]').forEach((s) => { s.hidden = s.dataset.view !== tab; });
+  $$('[data-view]').forEach((s) => { s.hidden = s.dataset.view !== view; });
+  // gewählten Bereich in der Leiste sichtbar machen (am Handy wird sie seitlich gewischt)
+  const btn = $(`.topnav [data-tab="${tab}"]`);
+  if (btn) btn.scrollIntoView({ block: 'nearest', inline: 'center' });
   render();
   window.scrollTo(0, 0);
 }
@@ -172,13 +181,31 @@ async function render() {
   $('#monthLabel').textContent = monthLabel(state.month);
   try {
     if (state.tab === 'overview') await renderOverview();
-    if (state.tab === 'plan') await renderPlan();
-    if (state.tab === 'entries') await renderEntries();
-    if (state.tab === 'lists') await renderLists();
+    if (state.tab === 'kosten') await renderKosten();
+    if (state.tab === 'stats') await renderStats();
+    if (LIST_TABS.includes(state.tab)) await renderLists();
     if (state.tab === 'household') await renderHousehold();
     if (state.tab === 'account') renderAccount();
   } catch (err) { toast(err.message); }
 }
+
+// ---------- „−“: Eintrag löschen, immer mit Rückfrage ----------
+const delBtn = (url, name, extra = '') =>
+  `<button type="button" class="del-btn" data-del="${url}" data-del-name="${esc(name)}" data-del-extra="${esc(extra)}" aria-label="${esc(name)} löschen" title="Löschen">−</button>`;
+// in der Capture-Phase, damit nicht zusätzlich der Bearbeiten-Dialog der Zeile aufgeht
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-del]');
+  if (!b) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const extra = b.dataset.delExtra ? `\n\n${b.dataset.delExtra}` : '';
+  if (!confirm(`„${b.dataset.delName}“ wirklich löschen?${extra}`)) return;
+  try {
+    await api('DELETE', b.dataset.del);
+    toast('Gelöscht');
+    render();
+  } catch (err) { toast(err.message); }
+}, true);
 
 // ---------- Übersicht ----------
 async function renderOverview() {
@@ -197,7 +224,11 @@ async function renderOverview() {
     ${s.refunds > 0 ? `<dt>+ Einnahmen / Erstattungen</dt><dd>${fmt(s.refunds)}</dd>` : ''}
     <dt class="total">= Verfügbar</dt><dd class="total ${s.available < 0 ? 'neg' : 'pos'}">${fmt(s.available)}</dd>`;
 
+  $('#dueNote').hidden = !s.dueThisMonth.length;
+  $('#dueNote').innerHTML = s.dueThisMonth.length ? `📅 Diesen Monat fällig: ${s.dueThisMonth
+    .map((d) => `<strong>${esc(d.name)}</strong> ${fmt(d.amount)}`).join(', ')} – ist bei den Fixkosten schon abgezogen.` : '';
   renderTeaser(s);
+  renderFixVar(s);
   const max = Math.max(1, ...s.categories.map((c) => c.fixed + Math.max(c.budget, c.spent)));
   $('#catEmpty').hidden = s.categories.length > 0;
   $('#catList').innerHTML = s.categories.filter((c) => c.total > 0).map((c) => {
@@ -223,16 +254,39 @@ async function renderOverview() {
     </div>`;
   }).join('');
 }
+// Tabelle: pro Kategorie Fixkosten und variable Kosten (ausgegeben, bei Budget „von …“)
+function renderFixVar(s) {
+  const rows = s.categories.filter((c) => c.fixed || c.spent || c.budget)
+    .sort((a, b) => (b.fixed + b.spent) - (a.fixed + a.spent));
+  const fixSum = rows.reduce((t, c) => t + c.fixed, 0);
+  const varSum = rows.reduce((t, c) => t + c.spent, 0);
+  const cell = (v) => (v ? fmt(v) : '<span class="muted">–</span>');
+  $('#fixVarTable').innerHTML = rows.length ? `
+    <thead><tr><th>Kategorie</th><th class="r">Fix</th><th class="r">Variabel</th><th class="r">Gesamt</th></tr></thead>
+    <tbody>${rows.map((c) => `<tr><td>${esc(c.name)}</td><td class="num r">${cell(c.fixed)}</td>
+      <td class="num r">${cell(c.spent)}${c.budget ? `<div class="muted small">von ${fmt(c.budget)}</div>` : ''}</td>
+      <td class="num r"><strong>${fmt(c.fixed + c.spent)}</strong></td></tr>`).join('')}</tbody>
+    <tfoot><tr><td>Summe</td><td class="num r">${fmt(fixSum)}</td><td class="num r">${fmt(varSum)}</td><td class="num r">${fmt(fixSum + varSum)}</td></tr></tfoot>`
+    : '<tbody><tr><td class="muted small">Noch keine Kosten in diesem Monat.</td></tr></tbody>';
+}
 $$('[data-quick]').forEach((b) => b.addEventListener('click', () => openEntryDialog({ kind: b.dataset.quick })));
 
-// ---------- Plan ----------
+// ---------- Kosten: Umschalter Einkommen | Fixkosten | Variabel ----------
+$$('[data-kosten]').forEach((b) => b.addEventListener('click', () => { state.kosten = b.dataset.kosten; renderKosten(); }));
+async function renderKosten() {
+  $$('[data-kosten]').forEach((b) => b.classList.toggle('active', b.dataset.kosten === state.kosten));
+  $$('[data-kostenview]').forEach((v) => { v.hidden = v.dataset.kostenview !== state.kosten; });
+  if (state.kosten === 'variabel') return renderEntries();
+  return renderPlan();
+}
 async function renderPlan() {
-  const [incomes, fixed] = await Promise.all([api('GET', '/api/incomes'), api('GET', '/api/fixed')]);
+  const [incomes, fixed] = await Promise.all([api('GET', '/api/incomes'), api('GET', `/api/fixed?month=${state.month}`)]);
 
   $('#incomeList').innerHTML = incomes.length ? incomes.map((i) => `
     <li data-id="${i.id}">
       <div class="main"><div class="title">${esc(i.name)}</div><div class="meta">${INTERVAL_LABEL[i.interval]}</div></div>
       <div class="right num">${fmt(i.amount)}${i.interval > 1 ? `<div class="meta">${fmt(i.amount / i.interval)} / Monat</div>` : ''}</div>
+      ${delBtn(`/api/incomes/${i.id}`, i.name)}
     </li>`).join('') : '<li class="muted small">Noch kein Einkommen eingetragen.</li>';
   $('#incomeTotal').textContent = fmt(incomes.reduce((s, i) => s + i.amount / i.interval, 0));
   $$('#incomeList li[data-id]').forEach((li) => li.addEventListener('click', () =>
@@ -240,7 +294,10 @@ async function renderPlan() {
 
   const groups = {};
   for (const f of fixed) (groups[f.category] ||= []).push(f);
-  const monthly = (f) => (f.amount / f.interval) * (f.share / 100);
+  const monthly = (f) => f.thisMonth;
+  const rightSide = (f) => f.dueMode
+    ? (f.dueNow ? `${fmt(f.thisMonth)}<div class="meta">diesen Monat fällig</div>` : `<span class="muted">0,00 €</span><div class="meta">diesen Monat</div>`)
+    : `${fmt(f.thisMonth)}<div class="meta">/ Monat</div>`;
   $('#fixedList').innerHTML = fixed.length ? Object.entries(groups).map(([cat, items]) => `
     <div class="group-title">${esc(cat)}</div>
     <ul class="list">${items.map((f) => `
@@ -248,8 +305,11 @@ async function renderPlan() {
         <div class="main">
           <div class="title">${esc(f.name)} ${f.kind === 'budget' ? '<span class="pill budget">Budget</span>' : ''}</div>
           <div class="meta">${fmt(f.amount)} ${INTERVAL_LABEL[f.interval]}${f.share < 100 ? ` · dein Anteil ${f.share.toLocaleString('de-DE')} %` : ''}</div>
+          ${f.dueMode && f.nextDue ? `<div class="meta">📅 nächste Fälligkeit ${fmtDate(f.nextDue)}</div>` : ''}
+          ${!f.dueMode && f.interval > 1 && f.kind !== 'budget' ? '<div class="meta">auf die Monate verteilt</div>' : ''}
         </div>
-        <div class="right num">${fmt(monthly(f))}<div class="meta">/ Monat</div></div>
+        <div class="right num">${rightSide(f)}</div>
+        ${delBtn(`/api/fixed/${f.id}`, f.name)}
       </li>`).join('')}
     </ul>`).join('') : '<p class="muted small empty">Noch keine Fixkosten eingetragen.</p>';
   const fixSum = fixed.filter((f) => f.kind !== 'budget').reduce((s, f) => s + monthly(f), 0);
@@ -263,13 +323,8 @@ async function renderPlan() {
 $('#addIncome').addEventListener('click', () => openIncomeDialog());
 $('#addFixed').addEventListener('click', () => openFixedDialog());
 
-// ---------- Ausgaben: Liste ----------
-state.sub = 'list';
-$$('[data-sub]').forEach((b) => b.addEventListener('click', () => { state.sub = b.dataset.sub; render(); }));
+// ---------- Variable Ausgaben ----------
 async function renderEntries() {
-  $$('[data-sub]').forEach((b) => b.classList.toggle('active', b.dataset.sub === state.sub));
-  $$('[data-subview]').forEach((v) => { v.hidden = v.dataset.subview !== state.sub; });
-  if (state.sub === 'stats') return renderStats();
   const entries = await api('GET', `/api/entries?month=${state.month}`);
   const out = entries.filter((e) => e.kind === 'mehr').reduce((s, e) => s + e.amount, 0);
   const inc = entries.filter((e) => e.kind === 'weniger').reduce((s, e) => s + e.amount, 0);
@@ -289,6 +344,7 @@ async function renderEntries() {
         <div class="num ${e.kind === 'mehr' ? 'neg' : 'pos'}">${e.kind === 'mehr' ? '−' : '+'}${fmt(e.amount)}</div>
         ${e.kind === 'weniger' ? '<span class="pill weniger">Einnahme</span>' : ''}
       </div>
+      ${delBtn(`/api/entries/${e.id}`, `${e.shop || e.note || e.category} ${fmt(e.amount)}`, e.files ? 'Die angehängten Belege werden auch gelöscht.' : '')}
     </li>`).join('');
   $$('#entryList li[data-id]').forEach((li) => li.addEventListener('click', () =>
     openEntryDialog(entries.find((e) => e.id === Number(li.dataset.id)))));
@@ -399,6 +455,27 @@ $('#pwForm').addEventListener('submit', async (e) => {
     setOldPasswordNeeded(true);
   } catch (err) { toast(err.message); }
 });
+// ---------- „＋“ unten rechts: Schnell eintragen ----------
+const QUICK = {
+  ausgabe: () => openEntryDialog({ kind: 'mehr' }),
+  einnahme: () => openEntryDialog({ kind: 'weniger' }),
+  fix: () => openFixedDialog(),
+  einkommen: () => openIncomeDialog(),
+  schuld: () => openDebtDialog({ direction: 'schuld' }),
+  forderung: () => openDebtDialog({ direction: 'forderung' }),
+  vermoegen: () => openAssetDialog(),
+  geburtstag: () => openBirthdayDialog(),
+};
+$('#fab').addEventListener('click', () => $('#quickDlg').showModal());
+$('#quickClose').addEventListener('click', () => $('#quickDlg').close());
+$('#quickDlg').addEventListener('click', (e) => {
+  if (e.target === $('#quickDlg')) { $('#quickDlg').close(); return; } // Tipp neben das Menü schließt es
+  const b = e.target.closest('[data-qa]');
+  if (!b) return;
+  $('#quickDlg').close();
+  QUICK[b.dataset.qa]();
+});
+
 // CSV-Export: im Cloud-Modus direkt im Browser erzeugen
 $('#exportCsv').addEventListener('click', async (e) => {
   if (!window.Cloud?.enabled) return;
@@ -447,6 +524,7 @@ $('#dlgForm').addEventListener('submit', async (e) => {
   try {
     await dlgHandlers.onSave(Object.fromEntries(new FormData(e.target)));
     dlg.close(); render();
+    toast('Gespeichert ✓');
   } catch (err) { $('#dlgError').textContent = err.message; }
 });
 $('#dlgDelete').addEventListener('click', async () => {
@@ -475,20 +553,44 @@ function openIncomeDialog(item) {
 
 function openFixedDialog(item) {
   const kind = item?.kind || 'fix';
+  // neue Einträge: im Fälligkeitsmonat; ältere Einträge mit 3/6/12 Monaten ohne Datum bleiben „verteilt“
+  const dueMode = !item || item.due_date || item.interval === 1 ? 'faellig' : 'verteilt';
   openDialog({
     title: item ? 'Bearbeiten' : 'Fixkosten / Budget hinzufügen',
     html: `
       <fieldset>
         <legend>Art</legend>
-        <label class="radio"><input type="radio" name="kind" value="fix" ${kind === 'fix' ? 'checked' : ''}> Fixkosten – jeden Monat gleich</label>
+        <label class="radio"><input type="radio" name="kind" value="fix" ${kind === 'fix' ? 'checked' : ''}> Fixkosten – feste Beträge (monatlich, vierteljährlich, halbjährlich, jährlich)</label>
         <label class="radio"><input type="radio" name="kind" value="budget" ${kind === 'budget' ? 'checked' : ''}> Budget – Obergrenze für variable Ausgaben</label>
       </fieldset>
       <label>Bezeichnung <input name="name" required maxlength="120" value="${esc(item?.name)}" placeholder="z. B. Hausabtrag, Einkaufen, Kfz-Versicherung"></label>
       ${categorySelect(item?.category)}
       <div class="row2">${amountInput(item?.amount)}${intervalSelect(item?.interval)}</div>
+      <fieldset data-due-box hidden>
+        <legend>Wann wird abgezogen?</legend>
+        <label class="radio"><input type="radio" name="due_mode" value="faellig" ${dueMode === 'faellig' ? 'checked' : ''}> Im Monat der Fälligkeit – ganzer Betrag</label>
+        <label data-due-date>Nächste Fälligkeit <input type="date" name="due_date" value="${esc(item?.due_date || '')}"></label>
+        <div class="hint" data-due-date>Danach zieht die App den Betrag automatisch wieder ab – <span data-due-every></span>.</div>
+        <label class="radio"><input type="radio" name="due_mode" value="verteilt" ${dueMode === 'verteilt' ? 'checked' : ''}> Jeden Monat einen Teil zurücklegen</label>
+      </fieldset>
       <label>Mein Anteil (%) <input name="share" inputmode="decimal" value="${item?.share ?? 100}"></label>
       <div class="hint">Bei gemeinsamen Kosten (z. B. Hausabtrag halbe-halbe) den Gesamtbetrag eintragen und 50 % wählen.
         Bei einem Budget werden deine Ausgaben derselben Kategorie damit verrechnet.</div>`,
+    onOpen: (root) => {
+      const EVERY = { 3: 'alle 3 Monate', 6: 'alle 6 Monate', 12: 'jedes Jahr' };
+      const update = () => {
+        const iv = Number($('[name=interval]', root).value);
+        const isFix = $('[name=kind]:checked', root).value === 'fix';
+        const box = $('[data-due-box]', root);
+        box.hidden = !(isFix && iv > 1);
+        const faellig = $('[name=due_mode]:checked', root).value === 'faellig';
+        $$('[data-due-date]', root).forEach((el) => { el.hidden = !faellig; });
+        $('[name=due_date]', root).required = !box.hidden && faellig;
+        $('[data-due-every]', root).textContent = EVERY[iv] || '';
+      };
+      root.addEventListener('change', update);
+      update();
+    },
     onSave: (d) => item ? api('PUT', `/api/fixed/${item.id}`, d) : api('POST', '/api/fixed', d),
     onDelete: item && (() => api('DELETE', `/api/fixed/${item.id}`)),
   });
@@ -580,10 +682,9 @@ document.addEventListener('click', (e) => {
   if (!el) return;
   if (el.dataset.gotoLists) state.list = el.dataset.gotoLists;
   else if (!$('#teaserCalc').innerHTML) state.list = 'geburtstag';
-  switchTab('lists');
+  switchTab(state.list);
 });
 
-$$('[data-list]').forEach((b) => b.addEventListener('click', () => { state.list = b.dataset.list; renderLists(); }));
 $('#listAdd').addEventListener('click', () => {
   if (state.list === 'geburtstag') openBirthdayDialog();
   else if (state.list === 'zekat') openZakatYearDialog();
@@ -600,7 +701,6 @@ const LIST_TEXT = {
 };
 
 async function renderLists() {
-  $$('[data-list]').forEach((b) => b.classList.toggle('active', b.dataset.list === state.list));
   const t = LIST_TEXT[state.list];
   $('#listTitle').textContent = t.title;
   $('#listHint').textContent = t.hint;
@@ -641,6 +741,7 @@ async function renderLists() {
         ${d.done ? '<span class="pill done">erledigt ✓</span>' : ''}
         <button type="button" class="btn small" data-pay="${d.id}">± Eintragen</button>
       </div>
+      ${delBtn(`/api/debts/${d.id}`, d.person + (d.title ? ' – ' + d.title : ''), 'Alle Teilzahlungen und Belege dazu werden auch gelöscht.')}
     </li>`;
   }).join('');
   $$('#listBody li[data-id]').forEach((li) => li.addEventListener('click', (e) => {
@@ -669,7 +770,7 @@ function openDebtDialog(item) {
         <label>Fällig bis <input type="date" name="due_date" value="${esc(v('due_date'))}"></label>
       </div>
       ${isDebt ? `<label class="check"><input type="checkbox" name="in_budget" ${item.in_budget ? 'checked' : ''}> Monatliche Rate bei Fixkosten mitrechnen</label>
-      <div class="hint">Nur anhaken, wenn du die Rate nicht schon unter „Plan → Fixkosten“ eingetragen hast.</div>` : ''}
+      <div class="hint">Nur anhaken, wenn du die Rate nicht schon unter „Kosten → Fixkosten“ eingetragen hast.</div>` : ''}
       <label>Notiz <input name="note" maxlength="300" value="${esc(v('note'))}"></label>
       ${!isEdit ? `<label class="check"><input type="checkbox" name="book">
         ${isDebt ? 'Ich habe das Geld bekommen – als Einnahme buchen' : 'Das Geld ist von mir weggegangen – als Ausgabe buchen'}</label>
@@ -768,6 +869,7 @@ async function renderBirthdays() {
         <div class="meta">🎁 ${giftText}${money ? ' · ' + money : ''}</div>
       </div>
       <span class="pill ${g?.status || 'offen'}">${GIFT_STATUS[g?.status || 'offen']}</span>
+      ${delBtn(`/api/birthdays/${b.id}`, b.name, 'Die geplanten Geschenke werden auch gelöscht.')}
     </li>`;
   }).join('');
   $$('#listBody li[data-id]').forEach((li) => li.addEventListener('click', () =>
@@ -1189,6 +1291,7 @@ async function renderAssets() {
           <strong class="num">${x.value == null ? '<span class="neg small">Preis fehlt</span>' : fmt(x.value)}</strong>
           <button type="button" class="btn small" data-amove="${x.id}">± Eintragen</button>
         </div>
+        ${delBtn(`/api/assets/${x.id}`, x.name, 'Alle Zu- und Abgänge dazu werden auch gelöscht.')}
       </li>`).join('')}`).join('');
   $('#listBody').innerHTML = groups;
   $$('#listBody li[data-id]').forEach((li) => li.addEventListener('click', (e) => {

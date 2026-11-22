@@ -31,7 +31,7 @@ function staticServer() {
   const browser = await chromium.launch();
   const errors = [];
   async function newPage(name) {
-    const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, deviceScaleFactor: 2 });
+    const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, deviceScaleFactor: 2, locale: 'de-DE' });
     await ctx.exposeFunction('__sb', backend.handle);
     await ctx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.HAUSHALT_CONFIG = { supabaseUrl: 'https://test.supabase.co', supabaseKey: 'test' };" }));
     await ctx.route('**/vendor/supabase.js', (r) => r.fulfill({ contentType: 'text/javascript', body: fs.readFileSync(path.join(__dirname, 'fake-supabase-client.js'), 'utf8') }));
@@ -204,9 +204,95 @@ function staticServer() {
   // ---------- 10. Bildschirmfotos ----------
   await fatih.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
   await fatih.waitForTimeout(500);
-  await shot(fatih, 'cloud-2-uebersicht.png');
-  await fatih.evaluate(() => { switchTab('entries'); });
-  await fatih.click('[data-sub="stats"]');
+  await shot(fatih, 'cloud-2-uebersicht.png', true);
+  // Übersicht endet mit der Tabelle Fix vs. Variabel
+  const fv = await fatih.$$eval('#fixVarTable tfoot td', (tds) => tds.map((t) => t.textContent));
+  assert.equal(fv[0], 'Summe');
+  assert.ok(fv[1].includes('800,00') && fv[2].includes('476,69') && fv[3].includes('1.276,69'), 'Fix/Variabel-Summen: ' + fv);
+  // Navigation oben: Kosten mit Umschalter
+  await fatih.click('.topnav [data-tab=kosten]');
+  await fatih.waitForSelector('[data-kostenview=einkommen]:not([hidden])'); // nach der Registrierung: Einkommen zuerst
+  assert.equal(await fatih.isVisible('[data-kostenview=fix]'), false);
+  await fatih.click('[data-kosten=einkommen]');
+  await fatih.waitForSelector('#incomeList li[data-id]');
+  await fatih.click('[data-kosten=variabel]');
+  await fatih.waitForSelector('#entryList li[data-id]');
+  await shot(fatih, 'cloud-6-kosten-variabel.png');
+  await fatih.click('[data-kosten=fix]');
+  await fatih.waitForSelector('[data-kostenview=fix]:not([hidden]) #fixedList li');
+  assert.equal(await fatih.isVisible('[data-kostenview=variabel]'), false);
+  // Halbjährliche Fixkosten über das Formular: Frage „Wann wird abgezogen?“ erscheint nur bei 3/6/12 Monaten
+  await fatih.click('#addFixed');
+  await fatih.waitForSelector('#dlg[open]');
+  assert.equal(await fatih.isVisible('[data-due-box]'), false, 'bei monatlich keine Frage');
+  await fatih.fill('#dlgBody [name=name]', 'Kfz-Versicherung');
+  await fatih.selectOption('#dlgBody [name=category]', 'Versicherungen');
+  await fatih.fill('#dlgBody [name=amount]', '600');
+  await fatih.selectOption('#dlgBody [name=interval]', '6');
+  assert.equal(await fatih.isVisible('[data-due-box]'), true);
+  assert.equal(await fatih.textContent('[data-due-every]'), 'alle 6 Monate');
+  await fatih.click('#dlgForm button[type=submit]');
+  assert.equal(await fatih.$eval('#dlgBody [name=due_date]', (el) => el.validity.valueMissing), true, 'Datum ist Pflicht');
+  await fatih.fill('#dlgBody [name=due_date]', '2026-11-15');
+  await shot(fatih, 'cloud-8-fixkosten-faellig.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelector('#fixedList').textContent.includes('nächste Fälligkeit'));
+  const kfzRow = await fatih.$eval('#fixedList', (el) => [...el.querySelectorAll('li')].find((li) => li.textContent.includes('Kfz')).textContent);
+  assert.ok(kfzRow.includes('halbjährlich') && kfzRow.includes('diesen Monat fällig') && kfzRow.includes('600,00'), kfzRow);
+  assert.equal((await api(fatih, 'GET', '/api/summary?month=2026-11')).fixedTotal, 1400);
+  assert.equal((await api(fatih, 'GET', '/api/summary?month=2026-12')).fixedTotal, 800);
+  await shot(fatih, 'cloud-7-kosten-fix.png', true);
+  // Listen-Bereiche direkt oben erreichbar
+  for (const [tab, title] of [['schuld', 'Meine Schulden'], ['forderung', 'Bekomme ich zurück'], ['vermoegen', 'Mein Vermögen'], ['zekat', 'Zekât'], ['geburtstag', 'Geburtstage & Geschenke']]) {
+    await fatih.click(`.topnav [data-tab=${tab}]`);
+    await fatih.waitForFunction((t) => document.querySelector('#listTitle').textContent === t, title);
+    assert.equal(await fatih.isVisible('section[data-view=lists]'), true);
+  }
+  // „＋“ unten rechts: Schnell eintragen
+  await fatih.click('.topnav [data-tab=kosten]');
+  await fatih.click('[data-kosten=variabel]');
+  await fatih.click('#fab');
+  await fatih.waitForSelector('#quickDlg[open]');
+  await shot(fatih, 'cloud-9-schnell-eintragen.png');
+  await fatih.click('[data-qa=ausgabe]');
+  await fatih.waitForSelector('#dlg[open]');
+  assert.equal(await fatih.isVisible('#quickDlg'), false);
+  await fatih.fill('#dlgBody [name=amount]', '9,99');
+  await fatih.fill('#dlgBody [name=shop]', 'Kiosk');
+  await fatih.fill('#dlgBody [name=date]', '2026-11-22');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('Gespeichert'));
+  await fatih.waitForFunction(() => document.querySelector('#entryList').textContent.includes('Kiosk'));
+  // „−“ mit Rückfrage: Abbrechen lässt den Eintrag stehen, OK entfernt ihn – ohne den Bearbeiten-Dialog zu öffnen
+  const kioskIdx = () => fatih.$$eval('#entryList li', (lis) => lis.findIndex((li) => li.textContent.includes('Kiosk')));
+  const minusSel = async () => `#entryList li:nth-child(${(await kioskIdx()) + 1}) .del-btn`;
+  let asked = '';
+  fatih.once('dialog', (d) => { asked = d.message(); d.dismiss(); });
+  await fatih.click(await minusSel());
+  assert.match(asked, /„Kiosk 9,99\s€“ wirklich löschen\?/);
+  assert.equal(await fatih.isVisible('#dlg'), false, 'kein Bearbeiten-Dialog');
+  assert.ok((await kioskIdx()) >= 0, 'nach Abbrechen noch da');
+  fatih.once('dialog', (d) => d.accept());
+  await fatih.click(await minusSel());
+  await fatih.waitForFunction(() => !document.querySelector('#entryList').textContent.includes('Kiosk'));
+  assert.equal(await fatih.isVisible('#dlg'), false);
+  // „−“ auch bei Fixkosten, Einkommen, Schulden, Vermögen, Geburtstagen
+  await fatih.click('[data-kosten=fix]');
+  await fatih.waitForSelector('#fixedList .del-btn');
+  assert.ok((await fatih.$$('#fixedList .del-btn')).length >= 5);
+  await fatih.click('[data-kosten=einkommen]');
+  await fatih.waitForSelector('#incomeList .del-btn');
+  assert.equal((await fatih.$$('#incomeList .del-btn')).length, 1);
+  for (const tab of ['schuld', 'vermoegen', 'geburtstag']) {
+    await fatih.click(`.topnav [data-tab=${tab}]`);
+    await fatih.waitForSelector('#listBody .del-btn');
+  }
+  await fatih.click('.topnav [data-tab=schuld]');
+  await fatih.waitForSelector('#listBody .del-btn');
+  await shot(fatih, 'cloud-10-schulden-minus.png');
+  await fatih.click('.topnav [data-tab=stats]');
   await fatih.waitForTimeout(500);
   await shot(fatih, 'cloud-3-auswertung.png');
   await frau.evaluate(() => { state.month = '2026-11'; switchTab('household'); });
