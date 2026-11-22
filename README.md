@@ -8,6 +8,9 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
 - **Bedienung** – oben eine Leiste mit allen Bereichen nebeneinander (am Handy wischbar): Übersicht · Kosten ·
   Auswertung · Schulden · Forderungen · Vermögen & Gold · Zekât · Geburtstage · Haushalt. Unter **Kosten** schaltet
   man zwischen **Einkommen | Fixkosten | Variabel** um.
+- **Kassenbon scannen** – Foto vom Bon machen (＋ → „📷 Kassenbon scannen“ oder im Ausgabe-Formular): Die App liest
+  **Betrag, Geschäft, Datum** und schlägt die **Kategorie** vor; das Foto hängt als Beleg dran. Man prüft die farbig
+  markierten Felder und speichert. Die Texterkennung läuft komplett auf dem Handy (kostenlos, ohne weiteres Konto).
 - **Schnell eintragen und austragen** – das runde **＋** unten rechts öffnet auf jeder Seite ein Menü (Ausgabe,
   Einnahme, Fixkosten, Einkommen, Schuld, Forderung, Vermögen, Geburtstag). Das **−** an jedem Eintrag löscht ihn –
   immer erst nach einer Rückfrage.

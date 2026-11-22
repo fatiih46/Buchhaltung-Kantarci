@@ -245,6 +245,7 @@
   <!-- Schnell eintragen -->
   <dialog id="quickDlg" class="sheet" aria-labelledby="quickTitle">
     <h2 id="quickTitle">Was möchtest du eintragen?</h2>
+    <button type="button" class="btn scan-btn wide" data-qa="scan">📷 Kassenbon scannen</button>
     <div class="quick-grid">
       <button type="button" data-qa="ausgabe"><span>💸</span>Ausgabe</button>
       <button type="button" data-qa="einnahme"><span>💶</span>Einnahme / Erstattung</button>
@@ -274,10 +275,12 @@
   </dialog>
 
   <datalist id="shopList"></datalist>
+  <input type="file" id="scanInput" accept="image/*" capture="environment" hidden>
   <div id="toast" class="toast" hidden></div>
   <script src="config.js"></script>
   <script src="core.js"></script>
   <script src="cloud.js"></script>
+  <script src="receipt.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

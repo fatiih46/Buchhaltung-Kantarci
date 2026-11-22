@@ -457,6 +457,7 @@ $('#pwForm').addEventListener('submit', async (e) => {
 });
 // ---------- „＋“ unten rechts: Schnell eintragen ----------
 const QUICK = {
+  scan: () => $('#scanInput').click(),
   ausgabe: () => openEntryDialog({ kind: 'mehr' }),
   einnahme: () => openEntryDialog({ kind: 'weniger' }),
   fix: () => openFixedDialog(),
@@ -467,6 +468,13 @@ const QUICK = {
   geburtstag: () => openBirthdayDialog(),
 };
 $('#fab').addEventListener('click', () => $('#quickDlg').showModal());
+$('#scanInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  openEntryDialog({ kind: 'mehr' });
+  scanInto($('#dlgBody'), file);
+});
 $('#quickClose').addEventListener('click', () => $('#quickDlg').close());
 $('#quickDlg').addEventListener('click', (e) => {
   if (e.target === $('#quickDlg')) { $('#quickDlg').close(); return; } // Tipp neben das Menü schließt es
@@ -622,6 +630,10 @@ function openEntryDialog(item = {}) {
   openDialog({
     title: isEdit ? 'Eintrag bearbeiten' : (kind === 'mehr' ? 'Neue Ausgabe' : 'Einnahme / Erstattung'),
     html: `
+      ${isEdit ? '' : `<div class="scan-box">
+        <label class="btn scan-btn">📷 Kassenbon scannen<input type="file" accept="image/*" capture="environment" data-scan hidden></label>
+        <div class="muted small" data-scan-status>Betrag, Geschäft und Datum werden automatisch eingetragen – du prüfst und speicherst.</div>
+      </div>`}
       <fieldset>
         <legend>Art</legend>
         <label class="radio"><input type="radio" name="kind" value="mehr" ${kind === 'mehr' ? 'checked' : ''}> Ausgabe</label>
@@ -645,6 +657,11 @@ function openEntryDialog(item = {}) {
         const hit = shopCache.find((x) => x.shop.toLowerCase() === shop.value.trim().toLowerCase());
         if (hit?.category) sel.value = hit.category;
       });
+      $('[data-scan]', body)?.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (file) scanInto(body, file);
+      });
     },
     onSave: async (d) => {
       if (isEdit) return api('PUT', `/api/entries/${item.id}`, d);
@@ -653,6 +670,87 @@ function openEntryDialog(item = {}) {
     },
     onDelete: isEdit && (() => api('DELETE', `/api/entries/${item.id}`)),
   });
+}
+
+// ---------- Kassenbon scannen: Texterkennung direkt auf dem Handy (Tesseract), danach bestätigen ----------
+let ocrWorker = null;
+let ocrProgress = null; // Rückmeldung in Prozent an das gerade offene Formular
+function loadScriptOnce(src) {
+  loadScriptOnce.cache ||= {};
+  return (loadScriptOnce.cache[src] ||= new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src; el.onload = resolve;
+    el.onerror = () => { delete loadScriptOnce.cache[src]; reject(new Error('Texterkennung konnte nicht geladen werden.')); };
+    document.head.appendChild(el);
+  }));
+}
+// wird einmal geladen und danach wiederverwendet (Sprachdaten speichert der Browser zwischen)
+async function getOcrWorker() {
+  await loadScriptOnce('vendor/tesseract/tesseract.min.js');
+  if (!ocrWorker) {
+    const base = new URL('vendor/tesseract/', location.href).href;
+    ocrWorker = Tesseract.createWorker('deu', 1, {
+      workerPath: base + 'worker.min.js', corePath: base, langPath: base, gzip: true,
+      logger: (m) => { if (m.status === 'recognizing text' && ocrProgress) ocrProgress(Math.round(m.progress * 100)); },
+    }).catch((err) => { ocrWorker = null; throw err; });
+  }
+  return ocrWorker;
+}
+// Foto für die Erkennung verkleinern (schneller, gleiche Genauigkeit)
+async function ocrImage(file) {
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    return c;
+  } catch { return file; }
+}
+async function readReceipt(file, onProgress) {
+  ocrProgress = onProgress;
+  try {
+    const worker = await getOcrWorker();
+    const { data } = await worker.recognize(await ocrImage(file));
+    return HaushaltReceipt.parseReceipt(data.text);
+  } finally { ocrProgress = null; }
+}
+async function scanInto(root, file) {
+  const status = $('[data-scan-status]', root);
+  // Foto gleich als Beleg anhängen
+  file.url = URL.createObjectURL(file);
+  pendingFiles.push(file);
+  $('.att-pick', root)?.redraw?.();
+  status.className = 'small scan-status busy';
+  status.textContent = 'Kassenbon wird gelesen … (beim ersten Mal dauert es etwas länger)';
+  let r;
+  try {
+    r = await readReceipt(file, (p) => { if (root.isConnected) status.textContent = `Kassenbon wird gelesen … ${p} %`; });
+  } catch (err) {
+    if (!root.isConnected) return;
+    status.className = 'small scan-status warn';
+    status.textContent = `⚠️ ${err.message || 'Texterkennung hat nicht geklappt.'} Bitte selbst eintragen – das Foto ist als Beleg angehängt.`;
+    return;
+  }
+  if (!root.isConnected) return; // Formular wurde inzwischen geschlossen
+  const mark = (el) => { el.classList.add('auto-filled'); el.addEventListener('input', () => el.classList.remove('auto-filled'), { once: true }); };
+  const found = [];
+  if (r.amount != null) {
+    const el = $('[name=amount]', root);
+    el.value = r.amount.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    mark(el); found.push('Betrag');
+  }
+  if (r.shop) { const el = $('[name=shop]', root); el.value = r.shop; mark(el); found.push('Geschäft'); }
+  if (r.date) { const el = $('[name=date]', root); el.value = r.date; mark(el); found.push('Datum'); }
+  if (r.category) { const el = $('[name=category]', root); el.value = r.category; mark(el); }
+  if (found.length) {
+    status.className = 'small scan-status ok';
+    status.textContent = `✅ Erkannt: ${found.join(', ')}. Bitte prüfen (farbig markiert) und auf „Speichern“ tippen.`;
+  } else {
+    status.className = 'small scan-status warn';
+    status.textContent = '⚠️ Auf dem Foto konnte nichts sicher erkannt werden. Bitte selbst eintragen – das Foto ist als Beleg angehängt.';
+  }
+  if (r.amount == null) $('[name=amount]', root).focus();
 }
 
 // ---------- Schulden, Forderungen, Geburtstage ----------
@@ -1142,6 +1240,7 @@ function setupFilePicker(root) {
       <div class="att-thumb">${f.type.startsWith('image/') ? `<img src="${f.url}" alt="">` : `<span class="att-pdf">📄<small>${esc(f.name)}</small></span>`}
         <button type="button" class="att-del" data-pending-del="${i}" aria-label="Entfernen">×</button></div>`).join('');
   };
+  box.redraw = draw;
   box.addEventListener('change', (e) => {
     if (!e.target.classList.contains('pick-input')) return;
     for (const f of e.target.files) { f.url = URL.createObjectURL(f); pendingFiles.push(f); }

@@ -278,6 +278,43 @@ function staticServer() {
   await fatih.click(await minusSel());
   await fatih.waitForFunction(() => !document.querySelector('#entryList').textContent.includes('Kiosk'));
   assert.equal(await fatih.isVisible('#dlg'), false);
+  // Kassenbon scannen: echte Texterkennung auf einem erzeugten Bon-Foto, danach bestätigen
+  const bonPage = await browser.newPage({ viewport: { width: 640, height: 560 } });
+  await bonPage.setContent(`<body style="margin:0;background:#fff"><pre style="font:26px/1.45 'DejaVu Sans Mono',monospace;color:#111;padding:24px;margin:0">
+     REWE Markt GmbH
+   Musterstrasse 5, Stuttgart
+
+Milch 3,5%            1,19
+Vollkornbrot          2,49
+Gouda Kaese           3,99
+--------------------------
+SUMME EUR             7,67
+Geg. EC-Karte         7,67
+
+20.11.2026      18:04
+</pre></body>`);
+  const bonPng = await bonPage.screenshot();
+  await bonPage.close();
+  await fatih.click('#fab');
+  await fatih.waitForSelector('#quickDlg[open]');
+  const [chooser] = await Promise.all([fatih.waitForEvent('filechooser'), fatih.click('[data-qa=scan]')]);
+  assert.equal(await fatih.isVisible('#quickDlg'), false, 'Menü geschlossen');
+  await chooser.setFiles({ name: 'kassenbon.png', mimeType: 'image/png', buffer: bonPng });
+  await fatih.waitForSelector('#dlg[open] [data-scan-status]');
+  await fatih.waitForFunction(() => /Erkannt|nichts sicher|nicht geklappt|nicht geladen/.test(document.querySelector('[data-scan-status]').textContent), null, { timeout: 180000 });
+  const scanStatus = await fatih.textContent('[data-scan-status]');
+  assert.match(scanStatus, /Erkannt: Betrag, Geschäft, Datum/, scanStatus);
+  assert.equal(await fatih.inputValue('#dlgBody [name=amount]'), '7,67');
+  assert.equal(await fatih.inputValue('#dlgBody [name=shop]'), 'Rewe');
+  assert.equal(await fatih.inputValue('#dlgBody [name=date]'), '2026-11-20');
+  assert.equal(await fatih.inputValue('#dlgBody [name=category]'), 'Einkaufen & Lebensmittel');
+  assert.equal((await fatih.$$('#dlgBody .auto-filled')).length, 4, 'erkannte Felder markiert');
+  assert.equal((await fatih.$$('#dlgBody [data-pending] .att-thumb')).length, 1, 'Foto als Beleg angehängt');
+  await shot(fatih, 'cloud-11-kassenbon-erkannt.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  const scanned = (await api(fatih, 'GET', '/api/entries?month=2026-11')).find((e) => e.amount === 7.67);
+  assert.ok(scanned && scanned.shop === 'Rewe' && scanned.date === '2026-11-20' && scanned.files === 1, JSON.stringify(scanned));
   // „−“ auch bei Fixkosten, Einkommen, Schulden, Vermögen, Geburtstagen
   await fatih.click('[data-kosten=fix]');
   await fatih.waitForSelector('#fixedList .del-btn');

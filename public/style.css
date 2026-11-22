@@ -353,3 +353,13 @@ input[type=date] { min-width: 0; -webkit-appearance: none; appearance: none; }
   border: 1px solid var(--line); background: var(--card); color: var(--danger); font-size: 1.2rem; font-weight: 700; line-height: 1;
 }
 .del-btn:hover { background: var(--danger-soft); border-color: var(--danger); }
+
+/* Kassenbon scannen */
+.scan-btn { background: var(--primary); color: var(--primary-text); border-color: var(--primary); font-weight: 700; }
+.sheet .scan-btn { margin-bottom: .6rem; padding: .8rem; font-size: 1rem; }
+.scan-box { display: flex; flex-direction: column; gap: .35rem; padding: .7rem; border-radius: 12px; background: var(--primary-soft); }
+.scan-box .scan-btn { justify-content: center; }
+.scan-status.busy { color: var(--text); }
+.scan-status.ok { color: var(--primary); font-weight: 600; }
+.scan-status.warn { color: var(--danger); }
+.auto-filled { outline: 2px solid var(--primary); outline-offset: 1px; background: var(--primary-soft) !important; }
