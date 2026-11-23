@@ -10,3 +10,9 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "same-origin"
     X-Frame-Options = "DENY"
+
+# Versionsdatei nie zwischenspeichern, damit die App Updates sofort erkennt
+[[headers]]
+  for = "/version.json"
+  [headers.values]
+    Cache-Control = "no-store"

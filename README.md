@@ -121,6 +121,9 @@ docker run -d -p 3000:3000 -v haushalt-daten:/data --name haushaltsbuch haushalt
 - `public/cloud.js` – Cloud-Modus: Anmeldung, Speicherung und Belege über Supabase.
 - `server.js` – eigener Server (Anmeldung, Belege, Auslieferung der App) für den Betrieb ohne Supabase.
 - `supabase/setup.sql` – Tabellen und Zugriffsregeln für Supabase.
+- `public/version.json` – aktuelle Version und „Neu in dieser Version“. Bei jedem Update die Version dort **und** in
+  `<meta name="app-version">` in `public/index.html` erhöhen: Dann zeigt die App allen „Neue Version verfügbar“
+  (beim Öffnen und beim Zurückkehren in die App) und danach einmal die Neuerungen. `npm test` prüft, dass beide passen.
 
 ## Tests
 
