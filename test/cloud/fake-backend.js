@@ -42,6 +42,10 @@ module.exports = async function createBackend(setupSql) {
         const u = users.get(String(op.email).toLowerCase());
         if (!u || u.password !== op.password) return { data: {}, error: { code: 'invalid_credentials', message: 'Invalid login credentials' } };
         if (!u.confirmed) return { data: {}, error: { code: 'email_not_confirmed', message: 'Email not confirmed' } };
+        // wie Supabase: gesperrte Konten (banned_until in der Zukunft) können sich nicht anmelden
+        const ban = await pg.query('select banned_until > now() as b from auth.users where id = $1', [u.id]);
+        if (!ban.rows.length) return { data: {}, error: { code: 'invalid_credentials', message: 'Invalid login credentials' } };
+        if (ban.rows[0].b) return { data: {}, error: { code: 'user_banned', message: 'User is banned' } };
         return { data: { session: sess(u) }, error: null };
       }
       case 'reset': {

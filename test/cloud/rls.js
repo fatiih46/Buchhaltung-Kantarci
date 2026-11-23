@@ -84,9 +84,32 @@ const assert = require('assert/strict');
   assert.equal(rowB.household, 'Familie K');
   assert.equal(rowB.household_members, 2);
   assert.ok(rowB.last_seen_at, 'zuletzt aktiv gesetzt');
-  assert.deepEqual(Object.keys(rowB).sort(), ['confirmed', 'email', 'household', 'household_members', 'last_saved_at', 'last_seen_at', 'last_sign_in_at', 'name', 'registered_at'], 'keine Inhalte');
+  assert.deepEqual(Object.keys(rowB).sort(), ['banned', 'confirmed', 'email', 'household', 'household_members', 'is_me', 'last_saved_at', 'last_seen_at', 'last_sign_in_at', 'name', 'registered_at', 'user_id'], 'keine Inhalte');
+  assert.equal(ov.find((r) => r.email === 'a@x').is_me, true);
+  assert.equal(rowB.is_me, false);
+  assert.equal(rowB.banned, false);
   assert.ok(!JSON.stringify(ov).includes('AAA'), 'gespeicherte Daten tauchen nicht auf');
   await assert.rejects(as(B, `select * from public.admin_overview()`), /Nur für den Besitzer/);
   await assert.rejects(as(null, `select * from public.admin_overview()`), /permission denied/);
+
+  // Sperren / entsperren / löschen: nur der Besitzer, nie sich selbst
+  await assert.rejects(as(B, `select public.admin_set_banned($1, true)`, [C]), /Nur für den Besitzer/);
+  await assert.rejects(as(B, `select public.admin_delete_user($1)`, [C]), /Nur für den Besitzer/);
+  await assert.rejects(as(null, `select public.admin_delete_user($1)`, [C]), /permission denied/);
+  await assert.rejects(as(A, `select public.admin_set_banned($1, true)`, [A]), /nicht selbst sperren/);
+  await assert.rejects(as(A, `select public.admin_delete_user($1)`, [A]), /nicht selbst löschen/);
+  await as(A, `select public.admin_set_banned($1, true)`, [B]);
+  assert.equal((await pg.query('select banned_until > now() as b from auth.users where id = $1', [B])).rows[0].b, true);
+  assert.equal((await as(A, `select banned from public.admin_overview() where email = 'b@x'`))[0].banned, true);
+  await as(A, `select public.admin_set_banned($1, false)`, [B]);
+  assert.equal((await pg.query('select banned_until from auth.users where id = $1', [B])).rows[0].banned_until, null);
+  // C (eigener Haushalt „Nachbarn“) endgültig löschen: Konto, Mitgliedschaft, Summen und leerer Haushalt weg
+  await as(A, `select public.admin_delete_user($1)`, [C]);
+  assert.equal((await pg.query('select count(*)::int n from auth.users where id = $1', [C])).rows[0].n, 0);
+  assert.equal((await pg.query('select count(*)::int n from public.members where user_id = $1', [C])).rows[0].n, 0);
+  assert.equal((await pg.query('select count(*)::int n from public.summaries where user_id = $1', [C])).rows[0].n, 0);
+  assert.equal((await pg.query(`select count(*)::int n from public.households where name = 'Nachbarn'`)).rows[0].n, 0);
+  assert.equal((await pg.query(`select count(*)::int n from public.households where name = 'Familie K'`)).rows[0].n, 1, 'anderer Haushalt bleibt');
+  await assert.rejects(as(A, `select public.admin_delete_user($1)`, [C]), /nicht gefunden/);
   console.log('Alle RLS-Prüfungen bestanden.');
 })().catch((e) => { console.error(e); process.exit(1); });

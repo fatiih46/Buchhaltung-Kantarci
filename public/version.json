@@ -1,10 +1,7 @@
 {
-  "version": "2026.11.23",
+  "version": "2026.11.23-2",
   "notes": [
-    "📷 Kassenbon scannen: Über ＋ fotografieren – Betrag, Geschäft und Datum werden automatisch eingetragen.",
-    "🔁 Raten automatisch abziehen und „Läuft bis“ für Fixkosten (z. B. nur bis 06/2027).",
-    "↩️ Zahlungen zu Schulden und Forderungen schnell über ＋ eintragen.",
-    "📱 Ruhigere Anzeige am iPhone: kein Hineinzoomen mehr beim Tippen, weiche Übergänge.",
-    "🔔 Neu: Die App meldet sich, wenn es ein Update gibt."
+    "🛡️ Mehr Sicherheit: Der Besitzer der App kann Konten sperren oder entfernen.",
+    "🔔 Die App meldet sich weiterhin von selbst, wenn es ein Update gibt."
   ]
 }
