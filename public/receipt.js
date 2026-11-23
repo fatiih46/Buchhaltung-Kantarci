@@ -119,5 +119,60 @@
     return { amount: findAmount(lines), date: findDate(lines.join('\n'), today), shop, category };
   }
 
-  return { parseReceipt };
+  // ---------- Kategorie aus freiem Text erkennen („Auto heile machen“ -> Auto & Verschleiß) ----------
+  // Einfache Wort-Erkennung auf dem Gerät: Stichwörter (auch als Teil zusammengesetzter Wörter) zählen,
+  // die Kategorie mit den meisten Treffern gewinnt. Kurze Stichwörter (≤ 3 Zeichen) nur als ganzes Wort.
+  const KEYWORDS = {
+    'Auto & Verschleiß': ['auto', 'kfz', 'pkw', 'wagen', 'werkstatt', 'reifen', 'felge', 'tüv', 'tuev', 'hu au', 'inspektion',
+      'ölwechsel', 'oelwechsel', 'öl', 'tank', 'benzin', 'diesel', 'sprit', 'super e10', 'e10', 'waschanlage', 'autowäsche',
+      'parken', 'parkhaus', 'parkschein', 'maut', 'vignette', 'bremse', 'batterie', 'auspuff', 'scheibenwischer', 'wischwasser',
+      'zündkerze', 'kupplung', 'getriebe', 'lackier', 'delle', 'unfall', 'abschlepp', 'pannenhilfe', 'adac', 'atu', 'carglass',
+      'motor', 'karosserie', 'stoßdämpfer', 'zahnriemen', 'klimaservice', 'scheinwerfer', 'aral', 'shell', 'esso'],
+    'Einkaufen & Lebensmittel': ['einkauf', 'lebensmittel', 'supermarkt', 'wocheneinkauf', 'lidl', 'aldi', 'rewe', 'edeka', 'kaufland',
+      'netto', 'penny', 'norma', 'bäcker', 'baecker', 'brot', 'brötchen', 'metzger', 'fleisch', 'obst', 'gemüse', 'milch',
+      'getränke', 'wasserkasten', 'markt', 'türkischer laden', 'halal'],
+    'Drogerie & Haushalt': ['drogerie', 'dm', 'rossmann', 'müller', 'putzmittel', 'waschmittel', 'spülmittel', 'klopapier',
+      'toilettenpapier', 'shampoo', 'zahnpasta', 'haushaltswaren', 'staubsauger', 'action', 'tedi'],
+    'Essen gehen & Lieferdienste': ['restaurant', 'essen gehen', 'essen bestellt', 'lieferando', 'wolt', 'uber eats', 'döner', 'doener',
+      'pizza', 'burger', 'mcdonald', 'kfc', 'imbiss', 'café', 'cafe', 'kaffee', 'eis essen', 'eisdiele', 'frühstück', 'sushi', 'lahmacun'],
+    'Freizeit': ['kino', 'bowling', 'freizeit', 'ausflug', 'freizeitpark', 'schwimmbad', 'therme', 'konzert', 'theater', 'museum',
+      'zoo', 'fitness', 'gym', 'sport', 'verein', 'spiel', 'playstation', 'netflix kino', 'minigolf', 'kletter', 'trampolin',
+      'escape room', 'hobby', 'lifestyle', 'tickets', 'veranstaltung', 'fußball'],
+    'Kleidung & Shopping': ['kleidung', 'klamotten', 'jacke', 'hose', 'schuhe', 'pullover', 'shirt', 'kleid', 'mantel', 'zalando',
+      'h&m', 'primark', 'vinted', 'deichmann', 'shopping', 'tasche', 'socken', 'unterwäsche'],
+    'Gesundheit': ['arzt', 'ärztin', 'zahnarzt', 'apotheke', 'medikament', 'tabletten', 'rezept', 'brille', 'kontaktlinsen',
+      'physio', 'krankengymnastik', 'krankenhaus', 'praxisgebühr', 'zuzahlung', 'hörgerät', 'optiker'],
+    'Kinder': ['kind', 'baby', 'windeln', 'kita', 'kindergarten', 'schule', 'schulsachen', 'spielzeug', 'nachhilfe',
+      'schulranzen', 'babynahrung', 'kinderwagen', 'klassenfahrt', 'taschengeld'],
+    'Geschenke': ['geschenk', 'geburtstag', 'hochzeit', 'mitbringsel', 'blumen', 'gutschein'],
+    'Haus & Wohnen': ['miete', 'möbel', 'moebel', 'ikea', 'baumarkt', 'obi', 'bauhaus', 'hornbach', 'renovier', 'handwerker',
+      'heizung', 'garten', 'pflanzen', 'werkzeug', 'lampe', 'teppich', 'küche', 'badezimmer', 'reparatur wohnung', 'farbe'],
+    'Nebenkosten & Energie': ['strom', 'gas', 'wasser', 'nebenkosten', 'heizkosten', 'müllgebühr', 'abwasser', 'grundsteuer', 'stadtwerke', 'eon', 'vattenfall'],
+    'Handy, Internet & Abos': ['handy', 'smartphone', 'internet', 'wlan', 'dsl', 'vertrag', 'telekom', 'vodafone', 'o2', 'netflix',
+      'spotify', 'disney', 'amazon prime', 'abo', 'rundfunk', 'gez', 'icloud', 'youtube premium'],
+    'Versicherungen': ['versicherung', 'haftpflicht', 'hausrat', 'kasko', 'police', 'allianz', 'huk', 'ergo', 'debeka'],
+    'Urlaub': ['urlaub', 'hotel', 'flug', 'ferienwohnung', 'airbnb', 'reise', 'koffer', 'türkei urlaub', 'booking', 'camping'],
+    'Spenden & Zekât': ['spende', 'zekat', 'zekât', 'zakat', 'sadaka', 'sadaqa', 'fitre', 'moschee', 'kurban', 'qurban', 'kollekte'],
+    'Sparen & Rücklagen': ['sparen', 'rücklage', 'sparkonto', 'tagesgeld', 'etf', 'sparplan', 'notgroschen'],
+    'Schulden & Raten': ['rate', 'raten', 'kredit', 'darlehen', 'ratenzahlung', 'klarna', 'abzahlung'],
+  };
+  const norm = (t) => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
+  const COMPILED = Object.entries(KEYWORDS).map(([cat, words]) => [cat, words.map((w) => {
+    const n = norm(w);
+    const esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // kurze Wörter nur ganz, längere auch als Teil („Autoreparatur“, „Winterreifen“)
+    return n.length <= 3 ? new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`) : new RegExp(esc);
+  })]);
+  function classifyText(text) {
+    const t = norm(text);
+    if (!t.trim()) return null;
+    let best = null, bestScore = 0;
+    for (const [cat, res] of COMPILED) {
+      const score = res.reduce((s, re) => s + (re.test(t) ? 1 : 0), 0);
+      if (score > bestScore) { best = cat; bestScore = score; }
+    }
+    return best;
+  }
+
+  return { parseReceipt, classifyText };
 });

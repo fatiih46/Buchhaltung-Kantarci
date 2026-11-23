@@ -464,6 +464,18 @@ function statsFor(userId, month) {
     const s = m === month ? cur : summaryFor(userId, m);
     return { month: m, spent: s.spent, fixedTotal: s.fixedTotal, income: s.income, available: s.available };
   });
+  // Reichen die Budgets? Pro Budget-Kategorie die letzten 6 Monate: Budget gegen tatsächliche Ausgaben
+  const budgetItems = db.prepare("SELECT * FROM fixed_costs WHERE user_id = ? AND kind = 'budget'").all(userId);
+  const budgetCats = [...new Set(budgetItems.map((f) => f.category))];
+  const spentStmt = db.prepare("SELECT COALESCE(SUM(amount), 0) AS s FROM entries WHERE user_id = ? AND kind = 'mehr' AND category = ? AND substr(date, 1, 7) = ?");
+  const budgetHistory = budgetCats.map((cat) => {
+    const items = budgetItems.filter((f) => f.category === cat);
+    return budgetReport(cat, months.map((m) => ({
+      month: m,
+      budget: round2(items.reduce((t, f) => t + fixedAmountFor(f, m), 0)),
+      spent: round2(spentStmt.get(userId, cat, m).s),
+    })), { fixedId: items.length === 1 ? items[0].id : null });
+  });
 
   // Durchschnitt der 3 Vormonate, nur Monate mit erfassten Ausgaben
   const prevMonths = months.slice(2, 5);
@@ -539,7 +551,7 @@ function statsFor(userId, month) {
     month, summary: cur, byShop, trend, avgSpent, activeMonths,
     count: entries.length, avgPurchase: entries.length ? round2(cur.spent / entries.length) : 0,
     smallCount: small.length, smallTotal: round2(small.reduce((s, e) => s + e.amount, 0)),
-    top, tips, potential,
+    top, tips, potential, budgetHistory,
     savingsRate: cur.income > 0 ? Math.round((cur.available / cur.income) * 100) : null,
   };
 }
@@ -1117,6 +1129,67 @@ function cleanFileName(name) {
   return String(name || 'beleg').replace(/[^\w.\- äöüÄÖÜß()]/g, '_').slice(0, 100) || 'beleg';
 }
 
+// ---------- Gemeinsame Kasse: Stand eines Topfs in einem Monat ----------
+// plan: [{from: 'JJJJ-MM', amount, carryover}] (sortiert oder nicht), entries: [{date, amount}]
+// Der Stand (Plus wie Minus) wandert in den nächsten Monat, wenn carryover gilt – ein Minus mit Hinweis in der App.
+// Korrekturen (kind 'korrektur', Betrag ±, mit Grund) verändern den Stand direkt.
+const mIdx = (ym) => { const [y, m] = ym.split('-').map(Number); return y * 12 + (m - 1); };
+const mStr = (i) => `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
+function potStatus(plan, entries, month) {
+  const steps = [...(plan || [])].sort((a, b) => a.from.localeCompare(b.from));
+  if (!steps.length || month < steps[0].from) return { active: false, carryIn: 0, amount: 0, spent: 0, corrections: 0, available: 0, carryover: true };
+  const spentBy = {}, corrBy = {};
+  for (const e of entries || []) {
+    const k = String(e.date).slice(0, 7);
+    if (e.kind === 'korrektur') corrBy[k] = (corrBy[k] || 0) + Number(e.amount);
+    else spentBy[k] = (spentBy[k] || 0) + Number(e.amount);
+  }
+  let carry = 0;
+  for (let i = mIdx(steps[0].from); i <= mIdx(month); i++) {
+    const m = mStr(i);
+    const step = steps.filter((s) => s.from <= m).pop();
+    const spent = round2(spentBy[m] || 0);
+    const corrections = round2(corrBy[m] || 0);
+    const available = round2(carry + Number(step.amount) + corrections - spent);
+    if (m === month) return { active: true, carryIn: round2(carry), amount: Number(step.amount), spent, corrections, available, carryover: !!step.carryover };
+    carry = step.carryover ? available : 0;
+  }
+  return { active: false, carryIn: 0, amount: 0, spent: 0, corrections: 0, available: 0, carryover: true };
+}
+// Auswertung eines Budgets über mehrere Monate: wie oft überschritten, Durchschnitt, Vorschlag
+// months: [{month, budget, spent}] – Monate ohne Budget zählen nicht
+function budgetReport(name, months, extra = {}) {
+  const active = months.filter((m) => m.budget > 0);
+  const over = active.filter((m) => m.spent > m.budget);
+  const avgSpent = active.length ? round2(active.reduce((t, m) => t + m.spent, 0) / active.length) : 0;
+  const avgBudget = active.length ? round2(active.reduce((t, m) => t + m.budget, 0) / active.length) : 0;
+  const lastBudget = active.length ? active[active.length - 1].budget : 0;
+  const roundUp = (v) => Math.ceil(v / 10) * 10;
+  let level = 'ok', advice = '';
+  if (active.length >= 2 && over.length >= Math.ceil(active.length / 2)) {
+    level = 'warn';
+    advice = `Meistens überschritten – Budget auf etwa ${roundUp(avgSpent)} € anpassen oder mehr aufpassen.`;
+  } else if (over.length) {
+    level = 'info';
+    advice = `${over.length}× überschritten – im Auge behalten.`;
+  } else if (active.length >= 3 && avgSpent < lastBudget * 0.7) {
+    level = 'low';
+    advice = `Großzügig geplant – im Schnitt nur ${avgSpent.toLocaleString('de-DE')} € gebraucht, Budget ließe sich senken.`;
+  } else if (active.length) {
+    advice = 'Passt – Budget reicht.';
+  }
+  return { name, months, overCount: over.length, activeCount: active.length, avgSpent, avgBudget, level, advice, ...extra };
+}
+
+// Plan ab einem Monat ändern (frühere Monate bleiben wie sie waren)
+// note: Grund der Änderung (wird im Verlauf angezeigt)
+function potPlanUpdate(plan, month, amount, carryover, note = '') {
+  const rest = (plan || []).filter((s) => s.from < month);
+  const step = { from: month, amount: round2(Number(amount)), carryover: !!carryover };
+  if (note && String(note).trim()) step.note = String(note).trim().slice(0, 200);
+  return [...rest, step];
+}
+
 return { createCore, HttpError, CATEGORIES, INTERVALS, UPLOAD_TYPES, MAX_UPLOAD, fileMatchesType, cleanFileName,
-  round2, str, num, dateStr, monthStr };
+  round2, str, num, dateStr, monthStr, potStatus, potPlanUpdate, budgetReport };
 });

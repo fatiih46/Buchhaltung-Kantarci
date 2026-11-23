@@ -8,6 +8,16 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
 - **Bedienung** – oben eine Leiste mit allen Bereichen nebeneinander (am Handy wischbar): Übersicht · Kosten ·
   Auswertung · Schulden · Forderungen · Vermögen & Gold · Zekât · Geburtstage · Haushalt. Unter **Kosten** schaltet
   man zwischen **Einkommen | Fixkosten | Variabel** um.
+- **Gemeinsame Budgets** (Cloud-Modus, unter „Kosten → Fixkosten“) – Töpfe für den ganzen Haushalt mit Monatsbudget, z. B.
+  ⛽ Tanken 200 €, 🛒 Einkaufen 150 €, 🎉 Lifestyle 50 €. Beide tragen ein und sehen denselben Stand (wer, wann, wie viel,
+  Kassenbon). Gescannte Bons werden anhand der Kategorie automatisch der passenden Kasse zugeordnet („Bezahlt aus“).
+  Plus wie Minus werden in den nächsten Monat übertragen (pro Budget abschaltbar), bei Minus mit Hinweis; „✏️ Korrigieren“
+  ändert den Stand mit Pflicht-Grund, Betragsänderungen speichern einen Grund im Verlauf. Die Auswertung
+  „📊 Reichen eure Budgets?“ (letzte 6 Monate, auch für eigene Budgets) schlägt Anpassungen vor. Ausgaben werden dem
+  Budget zugeordnet, dessen **Name** im Text steht („Auto wieder fit gemacht“ → „Auto“), sonst über die Kategorie.
+- **Kategorie aus Text** – „Auto heile machen“ → Auto & Verschleiß (Wort-Erkennung auf dem Gerät, `public/receipt.js`).
+- **Gegenseitig ansehen** – unter ⚙ gibt jede Person ihre Einträge und Belege für den Haushalt frei; oben umschalten,
+  beim Partner ist alles nur zum Ansehen.
 - **Kassenbon scannen** – Foto vom Bon machen (＋ → „📷 Kassenbon scannen“ oder im Ausgabe-Formular): Die App liest
   **Betrag, Geschäft, Datum** und schlägt die **Kategorie** vor; das Foto hängt als Beleg dran. Man prüft die farbig
   markierten Felder und speichert. Die Texterkennung läuft komplett auf dem Handy (kostenlos, ohne weiteres Konto).

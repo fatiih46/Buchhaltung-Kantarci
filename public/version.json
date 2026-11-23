@@ -1,7 +1,10 @@
 {
-  "version": "2026.11.23-3",
+  "version": "2026.11.23-5",
   "notes": [
-    "🔄 Updates kommen jetzt von selbst: Beim Öffnen lädt die App die neue Version automatisch.",
-    "🛡️ Der Besitzer der App kann Konten sperren oder entfernen (erst nach „⋯ Verwalten“ und mit Bestätigung)."
+    "🧺 Neu: Gemeinsame Budgets unter „Kosten → Fixkosten“ – z. B. ⛽ Tanken, 🛒 Einkaufen, 🎉 Lifestyle oder eigene wie 🚗 Auto.",
+    "🤖 Die App erkennt aus deinem Text, wofür das Geld ist: „Auto wieder fit gemacht“ → Budget „Auto“.",
+    "↪️ Plus und Minus wandern in den nächsten Monat – bei Minus mit Hinweis. „✏️ Korrigieren“ mit Grund, für beide nachvollziehbar.",
+    "📊 Neu in der Auswertung: „Reichen eure Budgets?“ – zeigt, wo ihr öfter drüber liegt und das Budget anpassen solltet.",
+    "👀 Gegenseitig ansehen: Unter ⚙ freigeben, dann kann dein Partner alles ansehen – ändern kann jeder nur das Eigene."
   ]
 }

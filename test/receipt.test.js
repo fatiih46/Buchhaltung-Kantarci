@@ -83,3 +83,20 @@ Steuer-Satz Netto 7,20`, TODAY);
   assert.equal(r.shop, 'Hofladen Weber');
   assert.equal(r.amount, 7.7);
 });
+
+const { classifyText } = require('../public/receipt.js');
+test('Kategorie aus freiem Text erkennen', () => {
+  const cases = [
+    ['Auto heile machen', 'Auto & Verschleiß'], ['Autoreparatur', 'Auto & Verschleiß'], ['Winterreifen montiert', 'Auto & Verschleiß'],
+    ['TÜV', 'Auto & Verschleiß'], ['Ölwechsel', 'Auto & Verschleiß'], ['tanken', 'Auto & Verschleiß'],
+    ['Wocheneinkauf Lidl', 'Einkaufen & Lebensmittel'], ['Brötchen beim Bäcker', 'Einkaufen & Lebensmittel'],
+    ['Kino mit den Kindern', 'Freizeit'], ['Bowling', 'Freizeit'], ['Döner', 'Essen gehen & Lieferdienste'],
+    ['Pizza bestellt', 'Essen gehen & Lieferdienste'], ['neue Schuhe', 'Kleidung & Shopping'], ['Apotheke Hustensaft', 'Gesundheit'],
+    ['Windeln', 'Kinder'], ['Geschenk für Mama', 'Geschenke'], ['Sadaka Moschee', 'Spenden & Zekât'], ['Stromabschlag', 'Nebenkosten & Energie'],
+    ['Handyvertrag', 'Handy, Internet & Abos'], ['Hotel Antalya', 'Urlaub'], ['IKEA Regal', 'Haus & Wohnen'],
+  ];
+  for (const [text, cat] of cases) assert.equal(classifyText(text), cat, text);
+  assert.equal(classifyText(''), null);
+  assert.equal(classifyText('xyz qwertz'), null, 'unbekannt -> nichts raten');
+  assert.equal(classifyText('Moped'), null, '„o2“ steckt nicht in Wörtern');
+});

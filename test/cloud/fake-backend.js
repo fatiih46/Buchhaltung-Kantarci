@@ -25,7 +25,7 @@ module.exports = async function createBackend(setupSql) {
     const p = lock.then(run, run); lock = p.catch(() => {}); return p;
   };
   const ident = (s) => { if (!/^[a-z_]+$/.test(s)) throw new Error('bad ident ' + s); return s; };
-  const cols = (c) => c.split(',').map((x) => ident(x.trim())).join(', ');
+  const cols = (c) => (c.trim() === '*' ? '*' : c.split(',').map((x) => ident(x.trim())).join(', '));
   const sess = (u) => ({ access_token: 't', user: { id: u.id, email: u.email, user_metadata: u.meta } });
   const err = (e) => ({ data: null, error: { message: e.message, code: e.code } });
   async function handle(op) {
@@ -79,6 +79,8 @@ module.exports = async function createBackend(setupSql) {
         let sql;
         if (q.action === 'select') {
           sql = `select ${cols(q.cols)} from ${t}${where}${q.order ? ` order by ${ident(q.order)}` : ''}`;
+        } else if (q.action === 'delete') {
+          sql = `delete from ${t}${where}`;
         } else {
           const keys = Object.keys(q.values);
           const vals = keys.map((k) => { const v = q.values[k]; return v !== null && typeof v === 'object' ? JSON.stringify(v) : v; });

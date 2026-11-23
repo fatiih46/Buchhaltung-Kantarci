@@ -238,6 +238,194 @@ function staticServer() {
   assert.equal(await fatih.isVisible('#newsDlg'), false, 'nur einmal');
   serverVersion = { version: LOADED_VERSION, notes: [] };
 
+  // ---------- 6d. Gemeinsame Kasse ----------
+  const realNow = new Date();
+  const curYm = `${realNow.getFullYear()}-${String(realNow.getMonth() + 1).padStart(2, '0')}`;
+  const nextD = new Date(realNow.getFullYear(), realNow.getMonth() + 1, 1);
+  const nextYm = `${nextD.getFullYear()}-${String(nextD.getMonth() + 1).padStart(2, '0')}`;
+  await fatih.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
+  await fatih.waitForSelector('#potEmpty:not([hidden])');
+  await fatih.click('#potTemplate');
+  await fatih.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 3);
+  assert.match(await fatih.textContent('#kasseTotals'), /Noch übrig\s*400,00/);
+  // Partnerin sieht dieselben Kassen und scannt einen Tankbeleg -> landet automatisch in „Tanken“
+  await frau.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
+  await frau.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 3);
+  const dd = `${String(realNow.getDate()).padStart(2, '0')}.${String(realNow.getMonth() + 1).padStart(2, '0')}.${realNow.getFullYear()}`;
+  const tankPage = await browser.newPage({ viewport: { width: 640, height: 520 } });
+  await tankPage.setContent(`<body style="margin:0;background:#fff"><pre style="font:26px/1.45 'DejaVu Sans Mono',monospace;color:#111;padding:24px;margin:0">
+     ARAL Tankstelle
+   Hauptstrasse 1
+
+Super E10   34,17 l
+--------------------------
+SUMME EUR            61,50
+Geg. EC-Karte        61,50
+
+${dd}      17:12
+</pre></body>`);
+  const tankPng = await tankPage.screenshot();
+  await tankPage.close();
+  await frau.click('#fab');
+  const [ch2] = await Promise.all([frau.waitForEvent('filechooser'), frau.click('[data-qa=scan]')]);
+  await ch2.setFiles({ name: 'tanken.png', mimeType: 'image/png', buffer: tankPng });
+  await frau.waitForFunction(() => /Erkannt/.test(document.querySelector('[data-scan-status]').textContent), null, { timeout: 180000 });
+  await frau.waitForFunction(() => { const s = document.querySelector('#dlgBody [name=paid_from]'); return s && s.selectedOptions[0].textContent.includes('Tanken'); });
+  assert.equal(await frau.inputValue('#dlgBody [name=amount]'), '61,50');
+  assert.equal(await frau.isVisible('#dlgBody [data-kind-box]'), false, 'bei Kasse keine Art-Auswahl');
+  await frau.waitForTimeout(250);
+  await shot(frau, 'cloud-19-kasse-scan.png');
+  await frau.click('#dlgForm button[type=submit]');
+  await frau.waitForSelector('#dlg', { state: 'hidden' });
+  await frau.waitForFunction(() => document.querySelector('#potList').textContent.includes('Aral'));
+  assert.equal((await api(frau, 'GET', '/api/entries?month=' + curYm)).some((e) => e.amount === 61.5), false, 'nicht in den privaten Ausgaben');
+  // Besitzer sieht den Abzug, wer es war und den Kassenbon
+  await fatih.evaluate(() => render());
+  await fatih.waitForFunction(() => document.querySelector('#potList').textContent.includes('Aral'));
+  const k1 = await api(fatih, 'GET', `/api/pots?month=${curYm}`);
+  const tank = k1.pots.find((p) => p.name === 'Tanken');
+  assert.equal(tank.available, 138.5);
+  assert.equal(tank.entries[0].who, 'Partnerin');
+  assert.ok(tank.entries[0].url.startsWith('data:image/'), 'Kassenbon für den Haushalt sichtbar');
+  assert.equal(k1.totals.available, 338.5);
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-20-kasse.png', true);
+  // Reichen die Budgets? (gemeinsame Budgets erscheinen in der Auswertung)
+  await fatih.evaluate((m) => { state.month = m; switchTab('stats'); }, curYm);
+  await fatih.waitForFunction(() => document.querySelector('#budgetCheck').textContent.includes('Tanken'));
+  assert.match(await fatih.textContent('#budgetCheck'), /gemeinsam/);
+  assert.equal(await fatih.$$eval('#budgetCheck .mb', (els) => els.length >= 6), true);
+  await fatih.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
+  // nächster Monat: Rest wird übertragen
+  const k2 = await api(fatih, 'GET', `/api/pots?month=${nextYm}`);
+  const tank2 = k2.pots.find((p) => p.name === 'Tanken');
+  assert.equal(tank2.carryIn, 138.5);
+  assert.equal(tank2.available, 338.5);
+  // Betrag ab nächstem Monat ändern: dieser Monat bleibt gleich
+  const eink = k1.pots.find((p) => p.name === 'Einkaufen');
+  await api(fatih, 'PUT', `/api/pots/${eink.id}`, { name: 'Einkaufen', icon: '🛒', amount: '180', carryover: 'on', categories: eink.categories.join('|'), month: nextYm });
+  assert.equal((await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Einkaufen').amount, 150);
+  assert.equal((await api(fatih, 'GET', `/api/pots?month=${nextYm}`)).pots.find((p) => p.name === 'Einkaufen').available, 330);
+  // „−“: Ausgabe der Kasse löschen -> Betrag zurück
+  fatih.once('dialog', (d) => d.accept());
+  await fatih.click('#potList .pot-entries .del-btn');
+  await fatih.waitForFunction(() => !document.querySelector('#potList').textContent.includes('Aral'));
+  assert.equal((await api(fatih, 'GET', `/api/pots?month=${curYm}`)).totals.available, 400);
+  await fatih.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
+  await frau.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
+
+  // ---------- 6e. Kategorie aus freiem Text erkennen ----------
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=ausgabe]');
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=note]', 'Auto heile machen');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=category]').value === 'Auto & Verschleiß');
+  assert.match(await fatih.textContent('#dlgBody [data-auto-cat]'), /Erkannt: Auto & Verschleiß/);
+  // und die passende gemeinsame Kasse (Tanken hat „Auto & Verschleiß“)
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=paid_from]').selectedOptions[0].textContent.includes('Tanken'));
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-21-text-erkannt.png');
+  await fatih.click('#dlgCancel');
+  // Fixkosten: Name „Kfz-Steuer“ -> Auto
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=fix]');
+  await fatih.fill('#dlgBody [name=name]', 'Kita Gebühr');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=category]').value === 'Kinder');
+  await fatih.click('#dlgCancel');
+
+  // ---------- 6e2. Topf „Auto“: Text wird dem Topf mit passendem Namen zugeordnet, Minus wird übertragen ----------
+  await fatih.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
+  await fatih.waitForSelector('#potList .pot');
+  await fatih.click('#potAdd');
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=name]', 'Auto');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=categories][value="Auto & Verschleiß"]').checked, null, { timeout: 5000 });
+  await fatih.selectOption('#dlgBody [name=icon]', '💰');
+  await fatih.fill('#dlgBody [name=amount]', '100');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 4);
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=ausgabe]');
+  await fatih.fill('#dlgBody [name=note]', 'Auto wieder fit gemacht');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=paid_from]').selectedOptions[0].textContent.includes('Auto ('));
+  await fatih.fill('#dlgBody [name=amount]', '250');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => /150,00\s€ überschritten/.test(document.querySelector('#potList').textContent));
+  assert.match(await fatih.textContent('#potList'), /Achtet mehr darauf oder passt das Budget an/);
+  const autoNext = (await api(fatih, 'GET', `/api/pots?month=${nextYm}`)).pots.find((p) => p.name === 'Auto');
+  assert.equal(autoNext.carryIn, -150, 'Minus wird in den nächsten Monat übertragen');
+  assert.equal(autoNext.available, -50);
+  // von Hand korrigieren, mit Grund
+  const autoCard = await fatih.$$eval('#potList .pot', (cards) => cards.findIndex((c) => c.querySelector('.title').textContent.includes('Auto')));
+  await fatih.click(`#potList .pot:nth-child(${autoCard + 1}) [data-pot-fix]`);
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=amount]', '50');
+  await fatih.click('#dlgForm button[type=submit]');
+  assert.equal(await fatih.$eval('#dlgBody [name=note]', (el) => el.validity.valueMissing), true, 'Grund ist Pflicht');
+  await fatih.fill('#dlgBody [name=note]', 'Werkstatt hat 50 € Rabatt erstattet');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelector('#potList').textContent.includes('Korrektur: Werkstatt hat 50'));
+  assert.equal((await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Auto').available, -100);
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-23-auto-ueberschritten.png', true);
+  // Budget ab nächstem Monat erhöhen, mit Grund -> Verlauf
+  const autoPot = (await api(fatih, 'GET', `/api/pots?month=${nextYm}`)).pots.find((p) => p.name === 'Auto');
+  await api(fatih, 'PUT', `/api/pots/${autoPot.id}`, { name: 'Auto', icon: '💰', amount: '200', carryover: 'on', categories: autoPot.categories.join('|'), month: nextYm, reason: 'Auto ist älter, mehr Reparaturen' });
+  await fatih.evaluate((m) => { state.month = m; render(); }, nextYm);
+  await fatih.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 4);
+  await fatih.click(`#potList .pot:nth-child(${autoCard + 1}) [data-pot-edit]`);
+  await fatih.waitForSelector('#dlg[open] .history');
+  assert.match(await fatih.textContent('#dlgBody .history'), /Auto ist älter, mehr Reparaturen/);
+  await fatih.click('#dlgCancel');
+  // Topf „Auto“ wieder entfernen, damit die weiteren Prüfungen unverändert bleiben
+  await api(fatih, 'DELETE', `/api/pots/${autoPot.id}`);
+  await fatih.evaluate((m) => { state.month = m; render(); }, curYm);
+
+  // ---------- 6f. Gegenseitig ansehen (Freigabe, nur lesen) ----------
+  await frau.click('[data-tab=account]');
+  await frau.waitForSelector('#shareCard:not([hidden])');
+  assert.equal(await frau.isChecked('#shareAll'), false);
+  assert.equal(await frau.isVisible('#viewAs'), false, 'ohne Freigabe kein Umschalter');
+  await fatih.click('[data-tab=account]');
+  await fatih.waitForSelector('#shareCard:not([hidden])');
+  await fatih.check('#shareAll');
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('Freigegeben'));
+  await frau.reload();
+  await frau.waitForSelector('#app:not([hidden])');
+  await frau.waitForSelector('#viewAs:not([hidden])');
+  await frau.selectOption('#viewAs', { label: '👀 Fatih' });
+  await frau.waitForSelector('#viewBanner:not([hidden])');
+  await frau.evaluate(() => { state.month = '2026-11'; state.kosten = 'variabel'; switchTab('kosten'); });
+  await frau.waitForFunction(() => document.querySelector('#entryList').textContent.includes('Lidl'));
+  assert.equal(await frau.isVisible('#fab'), false, 'kein ＋ beim Ansehen');
+  assert.equal(await frau.$$eval('#entryList .del-btn', (els) => els.filter((e) => e.offsetParent).length), 0, 'kein −');
+  await frau.click('#entryList li[data-id]');
+  await frau.waitForSelector('#dlg[open]');
+  assert.match(await frau.textContent('#dlgTitle'), /nur ansehen/);
+  assert.equal(await frau.isVisible('#dlgForm button[type=submit]'), false);
+  assert.equal(await frau.isDisabled('#dlgBody [name=amount]'), true);
+  await frau.waitForTimeout(250);
+  await shot(frau, 'cloud-22-partner-ansehen.png');
+  await frau.click('#dlgCancel');
+  assert.match(await apiErr(frau, 'POST', '/api/entries', { kind: 'mehr', date: '2026-11-05', category: 'Sonstiges', amount: '1' }), /ändern kann nur Fatih/);
+  // zurück zu den eigenen Daten
+  await frau.click('#viewBack');
+  await frau.waitForSelector('#viewBanner', { state: 'hidden' });
+  assert.equal(await frau.isVisible('#fab'), true);
+  assert.ok(!(await api(frau, 'GET', '/api/entries?month=2026-11')).some((e) => e.shop === 'Lidl'), 'wieder eigene Daten');
+  // Freigabe zurücknehmen
+  await fatih.uncheck('#shareAll');
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('ausgeschaltet'));
+  await frau.reload();
+  await frau.waitForSelector('#app:not([hidden])');
+  await frau.waitForTimeout(300);
+  assert.equal(await frau.isVisible('#viewAs'), false);
+  await fatih.click('.topnav [data-tab=overview]');
+  await frau.click('.topnav [data-tab=overview]');
+
   // ---------- 7. Zweites Gerät von Fatih: gleichzeitige Änderungen gehen nicht verloren ----------
   const handy = await newPage('handy');
   await handy.fill('#loginForm [name=email]', 'FATIH@example.com');
@@ -382,8 +570,13 @@ Geg. EC-Karte         7,67
   assert.equal(await fatih.inputValue('#dlgBody [name=shop]'), 'Rewe');
   assert.equal(await fatih.inputValue('#dlgBody [name=date]'), '2026-11-20');
   assert.equal(await fatih.inputValue('#dlgBody [name=category]'), 'Einkaufen & Lebensmittel');
-  assert.equal((await fatih.$$('#dlgBody .auto-filled')).length, 4, 'erkannte Felder markiert');
+  // Betrag, Geschäft, Datum, Kategorie – und „Bezahlt aus“ (es gibt jetzt die Kasse „Einkaufen“)
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=paid_from]').selectedOptions[0].textContent.includes('Einkaufen'));
+  assert.equal((await fatih.$$('#dlgBody .auto-filled')).length, 5, 'erkannte Felder markiert');
   assert.equal((await fatih.$$('#dlgBody [data-pending] .att-thumb')).length, 1, 'Foto als Beleg angehängt');
+  // diesmal privat bezahlt: von Hand auf „Meinem eigenen Geld“ umstellen
+  await fatih.selectOption('#dlgBody [name=paid_from]', '');
+  assert.equal(await fatih.isVisible('#dlgBody [data-kind-box]'), true);
   await shot(fatih, 'cloud-11-kassenbon-erkannt.png');
   await fatih.click('#dlgForm button[type=submit]');
   await fatih.waitForSelector('#dlg', { state: 'hidden' });

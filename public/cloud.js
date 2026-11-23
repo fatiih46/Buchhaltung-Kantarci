@@ -282,7 +282,7 @@
     await ensureData();
     const [hh, members] = await Promise.all([
       sb.from('households').select('name, invite_code').eq('id', member.household_id).single(),
-      sb.from('members').select('user_id, name').order('created_at'),
+      sb.from('members').select('user_id, name, share_all').order('created_at'),
     ]);
     if (hh.error || members.error) throw offline(hh.error || members.error);
     // „zuletzt aktiv“ für die Nutzer-Übersicht des Besitzers (nur der Zeitpunkt), einmal pro Öffnen
@@ -291,7 +291,7 @@
     return {
       user: { id: auth.uid, name: member.name, email: auth.email },
       household: { name: hh.data.name, inviteCode: hh.data.invite_code },
-      members: members.data.map((m) => ({ id: m.user_id, name: m.name })),
+      members: members.data.map((m) => ({ id: m.user_id, name: m.name, shareAll: !!m.share_all })),
       isAdmin: admin.data === true,
       noticeAccepted: !!auth.meta.accepted_notice,
     };
@@ -355,20 +355,157 @@
   }
   async function logout() {
     await queue;
+    if (view) { view.raw.close(); view = null; }
     await sb.auth.signOut().catch(() => {});
     reset();
     return { ok: true };
   }
   // Belege: Liste mit zeitlich begrenzten Links zu den Dateien
-  async function attachments(query) {
-    const list = core.match('GET', '/api/attachments').route.handler({ user: ME, query, body: {}, params: {} });
+  // ---------- Daten des Partners ansehen (nur lesen, wenn er/sie es unter ⚙ freigegeben hat) ----------
+  let view = null; // { uid, name, raw, db, core }
+  Cloud.setView = async (uid, name) => {
+    await init();
+    await ensureData();
+    if (view) { view.raw.close(); view = null; }
+    if (!uid) return;
+    const { data, error } = await sb.from('user_data').select('data').eq('user_id', uid).maybeSingle();
+    if (error) throw offline(error);
+    if (!data) throw new HttpError(403, `${name} hat die eigenen Einträge (noch) nicht freigegeben.`);
+    const r = new SQL.Database(fromB64(data.data));
+    const vdb = wrap(r);
+    const vcore = C.createCore(vdb, {});
+    vcore.migrate(); // nur im Speicher – gespeichert wird hier nichts
+    view = { uid, name, raw: r, db: vdb, core: vcore };
+  };
+  Cloud.viewing = () => (view ? view.name : null);
+  const readOnly = () => new HttpError(403, `Du siehst gerade die Einträge von ${view.name} – ändern kann nur ${view.name} selbst. Oben auf „Meine Daten“ wechseln.`);
+  async function setShare(input) {
+    await requireAuth();
+    const { error } = await sb.rpc('set_share_all', { p_share: !!input.share });
+    if (error) throw offline(error);
+    return { ok: true };
+  }
+
+  async function attachments(query, ctx = { core, db }) {
+    const list = ctx.core.match('GET', '/api/attachments').route.handler({ user: ME, query, body: {}, params: {} });
     if (!list.length) return [];
-    const paths = list.map((a) => db.prepare('SELECT file_path FROM attachments WHERE id = ?').get(a.id).file_path);
+    const paths = list.map((a) => ctx.db.prepare('SELECT file_path FROM attachments WHERE id = ?').get(a.id).file_path);
     const { data } = await sb.storage.from(BUCKET).createSignedUrls(paths, 3600);
     return list.map((a, i) => ({ ...a, url: data?.[i]?.signedUrl || '' }));
   }
 
   // ---------- Öffentliche Schnittstelle (ersetzt fetch('/api/...')) ----------
+  // ---------- Gemeinsame Kasse (gehört dem Haushalt) ----------
+  const toNum = (v) => Number(v);
+  const UUID = '([0-9a-f-]{36})';
+  async function potsFor(query) {
+    const month = C.monthStr(query.get('month'));
+    const [pots, entries, members] = await Promise.all([
+      sb.from('pots').select('*').order('created_at'),
+      sb.from('pot_entries').select('*').order('date'),
+      sb.from('members').select('user_id, name'),
+    ]);
+    if (pots.error || entries.error || members.error) throw offline(pots.error || entries.error || members.error);
+    const names = Object.fromEntries(members.data.map((m) => [m.user_id, m.name]));
+    const monthEntries = entries.data.filter((e) => String(e.date).slice(0, 7) === month);
+    const paths = monthEntries.filter((e) => e.file_path).map((e) => e.file_path);
+    const urls = {};
+    if (paths.length) {
+      const { data } = await sb.storage.from(BUCKET).createSignedUrls(paths, 3600);
+      (data || []).forEach((x) => { if (x.signedUrl) urls[x.path] = x.signedUrl; });
+    }
+    // letzte 6 Monate für „Reichen eure Budgets?“
+    const [y0, m0] = month.split('-').map(Number);
+    const last6 = Array.from({ length: 6 }, (_, i) => { const d = new Date(y0, m0 - 6 + i, 1); return monthKey(d); });
+    const list = pots.data.map((p) => {
+      const mine = entries.data.filter((e) => e.pot_id === p.id);
+      const history = C.budgetReport(`${p.icon} ${p.name}`, last6.map((m) => {
+        const st = C.potStatus(p.plan, mine, m);
+        return { month: m, budget: st.active ? st.amount : 0, spent: st.spent };
+      }), { potId: p.id, shared: true });
+      return {
+        id: p.id, name: p.name, icon: p.icon, categories: p.categories || [], plan: p.plan, history,
+        ...C.potStatus(p.plan, mine, month),
+        entries: monthEntries.filter((e) => e.pot_id === p.id).sort((a, b) => String(b.date).localeCompare(String(a.date)))
+          .map((e) => ({ id: e.id, kind: e.kind || 'ausgabe', date: String(e.date).slice(0, 10), amount: toNum(e.amount), shop: e.shop, note: e.note,
+            who: e.user_id ? (names[e.user_id] || 'gelöschtes Konto') : 'gelöschtes Konto', mine: e.user_id === auth.uid,
+            fileType: e.file_type, url: e.file_path ? urls[e.file_path] || '' : '' })),
+      };
+    });
+    const sum = (k) => C.round2(list.filter((x) => x.active).reduce((s, x) => s + x[k], 0));
+    return { month, pots: list, totals: { amount: sum('amount'), carryIn: sum('carryIn'), spent: sum('spent'), available: sum('available') } };
+  }
+  function potFields(body) {
+    const name = C.str(body.name, 'Name', 40);
+    const icon = typeof body.icon === 'string' && body.icon.trim() ? body.icon.trim().slice(0, 8) : '💰';
+    const amount = C.num(body.amount, 'Betrag pro Monat');
+    const carryover = body.carryover === true || body.carryover === 'on' || body.carryover === '1';
+    const cats = (Array.isArray(body.categories) ? body.categories : String(body.categories || '').split('|'))
+      .filter((k) => C.CATEGORIES.includes(k));
+    const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 200) : '';
+    return { name, icon, amount, carryover, categories: cats, month: C.monthStr(body.month), reason };
+  }
+  async function createPot(body) {
+    const f = potFields(body);
+    const { data, error } = await sb.from('pots').insert({ household_id: member.household_id, name: f.name, icon: f.icon,
+      categories: f.categories, plan: [{ from: f.month, amount: f.amount, carryover: f.carryover }] }).select('id');
+    if (error) throw offline(error);
+    return { ok: true, id: data[0].id };
+  }
+  async function updatePot(id, body) {
+    const f = potFields(body);
+    const cur = await sb.from('pots').select('plan').eq('id', id).maybeSingle();
+    if (cur.error) throw offline(cur.error);
+    if (!cur.data) throw new HttpError(404, 'Nicht gefunden.');
+    const { error } = await sb.from('pots').update({ name: f.name, icon: f.icon, categories: f.categories,
+      plan: C.potPlanUpdate(cur.data.plan, f.month, f.amount, f.carryover, f.reason) }).eq('id', id);
+    if (error) throw offline(error);
+    return { ok: true };
+  }
+  async function deletePotRow(table, id) {
+    // Kassenbons zuerst löschen (solange die Ausgabe noch existiert, erlaubt das die Regel dem ganzen Haushalt)
+    const paths = table === 'pot_entries'
+      ? [(await sb.from('pot_entries').select('file_path').eq('id', id).maybeSingle()).data?.file_path].filter(Boolean)
+      : ((await sb.from('pot_entries').select('file_path').eq('pot_id', id)).data || []).map((e) => e.file_path).filter(Boolean);
+    if (paths.length) await sb.storage.from(BUCKET).remove(paths).catch(() => {});
+    const { error } = await sb.from(table).delete().eq('id', id);
+    if (error) throw offline(error);
+    return { ok: true };
+  }
+  // Ausgabe aus der Kasse, optional mit Kassenbon-Foto (liegt im eigenen Ordner, der Haushalt darf es ansehen)
+  Cloud.addPotEntry = async (body, file) => {
+    await init();
+    await ensureData();
+    if (view) throw readOnly();
+    const date = C.dateStr(body.date);
+    const kind = body.kind === 'korrektur' ? 'korrektur' : 'ausgabe';
+    let amount = C.num(body.amount, 'Betrag', { min: 0.01 });
+    if (!body.pot_id) throw new HttpError(400, 'Bitte ein Budget auswählen.');
+    if (kind === 'korrektur') {
+      if (!String(body.note || '').trim()) throw new HttpError(400, 'Bitte einen Grund für die Korrektur angeben.');
+      if (body.direction === 'minus') amount = -amount;
+    }
+    let filePath = null, fileType = null;
+    if (file) {
+      const ftype = String(file.type || '').toLowerCase();
+      if (!C.UPLOAD_TYPES[ftype]) throw new HttpError(415, 'Nur Fotos (JPG, PNG, WEBP, HEIC) oder PDF erlaubt.');
+      if (file.size > C.MAX_UPLOAD) throw new HttpError(413, 'Datei zu groß (max. 8 MB).');
+      const rand = crypto.getRandomValues(new Uint8Array(16)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
+      filePath = `${auth.uid}/kasse-${rand}${C.UPLOAD_TYPES[ftype]}`;
+      const up = await sb.storage.from(BUCKET).upload(filePath, file, { contentType: ftype, upsert: false });
+      if (up.error) throw new HttpError(400, `Upload fehlgeschlagen: ${up.error.message}`);
+      fileType = ftype;
+    }
+    const { error } = await sb.from('pot_entries').insert({ pot_id: body.pot_id, household_id: member.household_id, user_id: auth.uid,
+      date, amount, kind, shop: String(body.shop || '').trim().slice(0, 60), note: String(body.note || '').trim().slice(0, 200),
+      file_path: filePath, file_type: fileType });
+    if (error) {
+      if (filePath) sb.storage.from(BUCKET).remove([filePath]).catch(() => {});
+      throw offline(error);
+    }
+    return { ok: true };
+  };
+
   Cloud.api = async (method, url, body) => {
     await init();
     const u = new URL(url, location.href);
@@ -381,6 +518,9 @@
     if (path === '/api/password' && method === 'POST') return changePassword(input);
     if (path === '/api/forgot' && method === 'POST') return forgotPassword(input);
     if (path === '/api/notice' && method === 'POST') return acceptNotice();
+    if (path === '/api/share' && method === 'POST') return setShare(input);
+    // beim Ansehen fremder Daten ist alles andere als Lesen gesperrt
+    if (view && method !== 'GET') throw readOnly();
     if (path === '/api/admin/users') return adminUsers();
     const adminUser = path.match(/^\/api\/admin\/users\/([0-9a-f-]{36})(\/ban)?$/);
     if (adminUser && method === 'POST' && adminUser[2]) return adminRpc('admin_set_banned', { p_user: adminUser[1], p_banned: !!input.banned });
@@ -388,7 +528,20 @@
     if (path === '/api/me') return me();
     await ensureData();
     if (path === '/api/household') return household(u.searchParams);
-    if (path === '/api/attachments' && method === 'GET') return attachments(u.searchParams);
+    if (path === '/api/pots' && method === 'GET') return potsFor(u.searchParams);
+    if (path === '/api/pots' && method === 'POST') return createPot(input);
+    let pm = path.match(new RegExp(`^/api/pots/${UUID}$`));
+    if (pm && method === 'PUT') return updatePot(pm[1], input);
+    if (pm && method === 'DELETE') return deletePotRow('pots', pm[1]);
+    pm = path.match(new RegExp(`^/api/pot-entries/${UUID}$`));
+    if (pm && method === 'DELETE') return deletePotRow('pot_entries', pm[1]);
+    if (path === '/api/attachments' && method === 'GET') return attachments(u.searchParams, view || { core, db });
+    if (view && method === 'GET') {
+      // Lesen aus der Datenbank des Partners (Kopie im Speicher)
+      const found = view.core.match(method, path);
+      if (!found) throw new HttpError(404, 'Nicht gefunden.');
+      return clone(found.route.handler({ user: ME, body: input, params: found.params, query: u.searchParams }));
+    }
     if (!core.match(method, path)) throw new HttpError(404, 'Nicht gefunden.');
     const call = () => {
       const found = core.match(method, path); // nach dem Neuladen gehört die Route zur neuen Datenbank
@@ -401,6 +554,7 @@
   Cloud.upload = async (type, id, file) => {
     await init();
     await ensureData();
+    if (view) throw readOnly();
     const query = new URLSearchParams({ type, id: String(id) });
     const o = core.attOwner(ME.id, query);
     if (core.attCount(o.type, o.id) >= core.MAX_FILES_PER_ITEM) throw new HttpError(400, `Maximal ${core.MAX_FILES_PER_ITEM} Belege pro Eintrag.`);

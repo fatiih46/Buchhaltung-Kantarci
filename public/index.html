@@ -6,7 +6,7 @@
   <title>Haushaltsbuch</title>
   <meta name="theme-color" content="#1f6f5c">
   <!-- muss mit public/version.json übereinstimmen (wird getestet) -->
-  <meta name="app-version" content="2026.11.23-3">
+  <meta name="app-version" content="2026.11.23-5">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -57,6 +57,7 @@
       <div>
         <div class="hh-name" id="hhName"></div>
         <div class="hello" id="hello"></div>
+        <select id="viewAs" class="view-as" hidden aria-label="Wessen Einträge anzeigen?"></select>
       </div>
       <div class="month-picker">
         <button type="button" class="icon-btn" id="prevMonth" aria-label="Vorheriger Monat">‹</button>
@@ -78,6 +79,10 @@
       <button type="button" data-tab="geburtstag">Geburtstage</button>
       <button type="button" data-tab="household">Haushalt</button>
     </nav>
+    <div id="viewBanner" class="view-banner" hidden>
+      <span>👀 Einträge von <strong id="viewName"></strong> – nur ansehen</span>
+      <button type="button" class="btn small" id="viewBack">Zurück zu meinen</button>
+    </div>
     </div>
 
     <main class="content">
@@ -149,6 +154,20 @@
           <div id="fixedList"></div>
           <div class="list-total"><span>In diesem Monat (dein Anteil)</span><strong id="fixedTotal"></strong></div>
         </div>
+        <div data-kostenview="fix" id="kasseBox" class="stack" hidden>
+          <div class="card">
+            <div class="card-head"><h2>🧺 Gemeinsame Budgets</h2><button type="button" class="btn small" id="potAdd">＋ Neu</button></div>
+            <p class="muted small">Für euch beide zusammen (z. B. Tanken, Einkaufen, Lifestyle): Ihr tragt beide ein und seht denselben Stand. Plus wie Minus wandern in den nächsten Monat – bei Minus mit Hinweis. Mit „✏️ Korrigieren“ passt ihr den Stand mit Grund an.</p>
+            <div id="kasseTotals" class="summary-row"></div>
+          </div>
+          <div class="card" id="potEmpty" hidden>
+            <h2>Noch keine gemeinsamen Budgets</h2>
+            <p class="muted small">Leg sie mit einem Tipp an – die Beträge kannst du danach antippen und ändern.</p>
+            <button type="button" class="btn primary wide" id="potTemplate">⛽ Tanken 200 € · 🛒 Einkaufen 150 € · 🎉 Lifestyle 50 €</button>
+          </div>
+          <div id="potList" class="stack"></div>
+          <p class="muted small">💡 Euren Anteil daran tragt ihr jeweils unter „Kosten → Fixkosten“ ein (z. B. „Haushaltskasse 200 €“ als Fixkosten), dann stimmt auch euer persönlicher Rest.</p>
+        </div>
         <div data-kostenview="variabel" class="stack" hidden>
           <div class="card">
             <div class="card-head">
@@ -178,6 +197,11 @@
           <div class="card">
             <h2>Budget vs. Ausgaben</h2>
             <div id="budgetBars" class="hbars"></div>
+          </div>
+          <div class="card">
+            <h2>📊 Reichen eure Budgets?</h2>
+            <p class="muted small">Letzte 6 Monate – jedes Kästchen ist ein Monat: <span class="pos">grün</span> = hat gereicht, <span class="neg">rot</span> = überschritten. Antippen, um ein Budget anzupassen.</p>
+            <ul class="list" id="budgetCheck"></ul>
           </div>
           <div class="card">
             <h2>Variable Ausgaben – letzte 6 Monate</h2>
@@ -230,6 +254,11 @@
           <a class="btn" id="exportCsv" href="/api/export.csv">Daten als CSV exportieren</a>
           <button type="button" class="btn ghost" id="showNotice">📄 Hinweis zur Nutzung</button>
         </div>
+        <div class="card" id="shareCard" hidden>
+          <h2>👀 Gegenseitig ansehen</h2>
+          <label class="check"><input type="checkbox" id="shareAll"> Die anderen in unserem Haushalt dürfen <strong>alle meine Einträge und Belege ansehen</strong></label>
+          <p class="muted small">Nur ansehen – ändern kann jede Person nur ihre eigenen Daten. Du kannst die Freigabe jederzeit wieder ausschalten. Hat dein Partner / deine Partnerin ebenfalls freigegeben, kannst du oben unter deinem Namen umschalten.</p>
+        </div>
         <div class="card" id="adminCard" hidden>
           <div class="card-head"><h2>👑 Wer nutzt die App?</h2><button type="button" class="btn small" id="adminReload">Aktualisieren</button></div>
           <p class="muted small">Nur für dich sichtbar. Ohne Inhalte – keine Beträge oder Einträge, nur wer registriert ist und wann zuletzt aktiv.</p>
@@ -259,7 +288,7 @@
       <ul>
         <li><strong>Nutzung auf eigene Verantwortung.</strong> Es gibt keine Garantie, dass immer alles fehlerfrei funktioniert oder dass Daten nie verloren gehen. Sichere deine Daten ab und zu unter ⚙ „Daten als CSV exportieren“.</li>
         <li><strong>Keine besonderen Schutzmechanismen</strong> wie bei Banken (z. B. keine Zwei-Faktor-Anmeldung, keine Prüfung durch Dritte). Trag deshalb <strong>keine Passwörter, PINs, TANs oder Zugangsdaten</strong> ein und verwende ein eigenes, sicheres Passwort.</li>
-        <li><strong>Datenschutz:</strong> Deine Einträge sieht in der App nur dein eigenes Konto; im gemeinsamen Haushalt sieht die andere Person nur Monatssummen. Der Betreiber sieht in seiner Übersicht nur, <em>wer</em> die App nutzt (Name, E-Mail, Haushalt, Anmelde- und Nutzungszeitpunkt) – keine Beträge oder Einträge. Technisch liegen die Daten bei Supabase (Server in Frankfurt); als Verwalter der Datenbank hätte der Betreiber dort Zugriff, schaut sich Inhalte aber nicht an.</li>
+        <li><strong>Datenschutz:</strong> Deine Einträge sieht in der App nur dein eigenes Konto; im gemeinsamen Haushalt sieht die andere Person nur Monatssummen und die gemeinsamen Budgets – außer du gibst unter ⚙ „Gegenseitig ansehen“ frei, dann darf sie alles ansehen (aber nicht ändern). Der Betreiber sieht in seiner Übersicht nur, <em>wer</em> die App nutzt (Name, E-Mail, Haushalt, Anmelde- und Nutzungszeitpunkt) – keine Beträge oder Einträge. Technisch liegen die Daten bei Supabase (Server in Frankfurt); als Verwalter der Datenbank hätte der Betreiber dort Zugriff, schaut sich Inhalte aber nicht an.</li>
         <li>Berechnungen (z. B. verfügbarer Betrag, Zekât) sind eine <strong>Hilfe</strong> und ersetzen keine Beratung.</li>
         <li>Konto oder Daten löschen lassen: einfach beim Betreiber melden.</li>
       </ul>

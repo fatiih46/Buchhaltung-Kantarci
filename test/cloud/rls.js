@@ -111,5 +111,56 @@ const assert = require('assert/strict');
   assert.equal((await pg.query(`select count(*)::int n from public.households where name = 'Nachbarn'`)).rows[0].n, 0);
   assert.equal((await pg.query(`select count(*)::int n from public.households where name = 'Familie K'`)).rows[0].n, 1, 'anderer Haushalt bleibt');
   await assert.rejects(as(A, `select public.admin_delete_user($1)`, [C]), /nicht gefunden/);
+
+  // Gemeinsame Kasse: gehört dem Haushalt
+  const E = '44444444-4444-4444-4444-444444444444';
+  await pg.exec(`insert into auth.users (id, email) values ('${E}', 'e@x')`);
+  await as(E, `select public.create_household('Fremde', 'Erik')`);
+  const hhA = (await as(A, `select public.my_household() as h`))[0].h;
+  const hhE = (await as(E, `select public.my_household() as h`))[0].h;
+  const pot = (await as(A, `insert into public.pots (household_id, name, icon, plan) values ($1, 'Tanken', '⛽', '[{"from":"2026-11","amount":200,"carryover":true}]') returning id`, [hhA]))[0].id;
+  await assert.rejects(as(E, `insert into public.pots (household_id, name, plan) values ($1, 'X', '[]')`, [hhA]), /row-level security/, 'nicht in fremden Haushalt');
+  assert.equal((await as(B, `select * from public.pots`)).length, 1, 'Partnerin sieht den Topf');
+  assert.equal((await as(E, `select * from public.pots`)).length, 0, 'Fremde nicht');
+  // Ausgaben: Partnerin trägt ein (mit Kassenbon im eigenen Ordner), Besitzer sieht sie
+  await as(B, `insert into storage.objects (bucket_id, name) values ('belege', $1)`, [`${B}/bon.jpg`]);
+  await as(B, `insert into storage.objects (bucket_id, name) values ('belege', $1)`, [`${B}/privat.jpg`]);
+  await as(B, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, shop, file_path, file_type) values ($1, $2, $3, '2026-11-20', 61.5, 'Aral', $4, 'image/jpeg')`, [pot, hhA, B, `${B}/bon.jpg`]);
+  const seen = await as(A, `select user_id, amount, shop from public.pot_entries where kind = 'ausgabe'`);
+  assert.equal(seen.length, 1);
+  assert.equal(Number(seen[0].amount), 61.5);
+  assert.equal(seen[0].user_id, B);
+  assert.equal((await as(E, `select * from public.pot_entries`)).length, 0);
+  await assert.rejects(as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount) values ($1, $2, $3, '2026-11-20', 5)`, [pot, hhA, B]), /row-level security/, 'nicht im Namen anderer');
+  await assert.rejects(as(E, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount) values ($1, $2, $3, '2026-11-20', 5)`, [pot, hhE, E]), /row-level security/, 'Topf eines fremden Haushalts');
+  await assert.rejects(as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, file_path) values ($1, $2, $3, '2026-11-20', 5, $4)`, [pot, hhA, A, `${B}/privat.jpg`]), /row-level security/, 'keine fremden Belege verknüpfen');
+  // Kassenbon der Kasse: für den Haushalt sichtbar, private Belege nicht
+  assert.deepEqual((await as(A, `select name from storage.objects where bucket_id = 'belege' and name like $1`, [`${B}/%`])).map((r) => r.name), [`${B}/bon.jpg`]);
+  assert.equal((await as(E, `select name from storage.objects where name like $1`, [`${B}/%`])).length, 0);
+  assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/privat.jpg`])).length, 0, 'private Belege: nur die Person selbst');
+  assert.equal((await as(E, `delete from storage.objects where name = $1 returning 1`, [`${B}/bon.jpg`])).length, 0, 'Fremde nicht');
+  assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/bon.jpg`])).length, 1, 'Kassenbon: Haushalt darf mitlöschen');
+  // Korrekturen: +/− mit Grund; normale Ausgaben nur positiv
+  await as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, kind, note) values ($1, $2, $3, '2026-11-21', -20, 'korrektur', 'Bargeld vergessen')`, [pot, hhA, A]);
+  await assert.rejects(as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, kind, note) values ($1, $2, $3, '2026-11-21', 20, 'korrektur', '  ')`, [pot, hhA, A]), /korrektur_check/, 'Grund Pflicht');
+  await assert.rejects(as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount) values ($1, $2, $3, '2026-11-21', -5)`, [pot, hhA, A]), /amount_check/, 'Ausgabe nicht negativ');
+  await assert.rejects(as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, kind, note) values ($1, $2, $3, '2026-11-21', 5, 'quatsch', 'x')`, [pot, hhA, A]), /kind_check/);
+  // Gegenseitig ansehen: erst nach Freigabe, nur lesen, nur im eigenen Haushalt
+  await as(B, `insert into user_data (user_id, data) values ($1, 'BBB')`, [B]);
+  assert.equal((await as(A, `select * from user_data where user_id = $1`, [B])).length, 0, 'ohne Freigabe nichts');
+  assert.equal((await as(A, `select name from storage.objects where name = $1`, [`${B}/privat.jpg`])).length, 0);
+  await as(B, `select public.set_share_all(true)`);
+  assert.equal((await as(A, `select data from user_data where user_id = $1`, [B]))[0].data, 'BBB', 'nach Freigabe lesbar');
+  assert.equal((await as(A, `select name from storage.objects where name = $1`, [`${B}/privat.jpg`])).length, 1, 'Belege auch');
+  assert.equal((await as(A, `update user_data set data = 'X' where user_id = $1 returning 1`, [B])).length, 0, 'aber nicht änderbar');
+  assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/privat.jpg`])).length, 0, 'und nicht löschbar');
+  assert.equal((await as(E, `select * from user_data where user_id = $1`, [B])).length, 0, 'andere Haushalte nie');
+  assert.equal((await as(B, `select * from user_data where user_id = $1`, [A])).length, 0, 'Freigabe gilt nur in eine Richtung');
+  await assert.rejects(as(A, `update public.members set share_all = true where user_id = $1`, [B]), /permission denied|row-level/, 'Freigabe nur selbst');
+  await as(B, `select public.set_share_all(false)`);
+  assert.equal((await as(A, `select * from user_data where user_id = $1`, [B])).length, 0, 'zurückgenommen');
+  // Löschen eines Topfs entfernt seine Ausgaben
+  await as(A, `delete from public.pots where id = $1`, [pot]);
+  assert.equal((await pg.query('select count(*)::int n from public.pot_entries')).rows[0].n, 0);
   console.log('Alle RLS-Prüfungen bestanden.');
 })().catch((e) => { console.error(e); process.exit(1); });
