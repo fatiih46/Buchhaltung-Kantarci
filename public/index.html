@@ -6,7 +6,7 @@
   <title>Haushaltsbuch</title>
   <meta name="theme-color" content="#1f6f5c">
   <!-- muss mit public/version.json übereinstimmen (wird getestet) -->
-  <meta name="app-version" content="2026.11.23-3">
+  <meta name="app-version" content="2026.11.23-4">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -70,6 +70,7 @@
     <nav class="topnav" aria-label="Bereiche">
       <button type="button" data-tab="overview" class="active">Übersicht</button>
       <button type="button" data-tab="kosten">Kosten</button>
+      <button type="button" data-tab="kasse" hidden>🧺 Kasse</button>
       <button type="button" data-tab="stats">Auswertung</button>
       <button type="button" data-tab="schuld">Schulden</button>
       <button type="button" data-tab="forderung">Forderungen</button>
@@ -161,6 +162,22 @@
             <p class="muted small empty" id="entryEmpty" hidden>Keine Ausgaben in diesem Monat.</p>
           </div>
         </div>
+      </section>
+
+      <!-- Gemeinsame Kasse des Haushalts -->
+      <section data-view="kasse" hidden>
+        <div class="card">
+          <div class="card-head"><h2>🧺 Gemeinsame Kasse</h2><button type="button" class="btn small" id="potAdd">＋ Neue Kasse</button></div>
+          <p class="muted small">Für euren ganzen Haushalt: Ihr tragt beide ein und seht beide denselben Stand. Was übrig bleibt, wandert in den nächsten Monat.</p>
+          <div id="kasseTotals" class="summary-row"></div>
+        </div>
+        <div class="card" id="potEmpty" hidden>
+          <h2>Noch keine Kasse</h2>
+          <p class="muted small">Leg eure Töpfe mit einem Tipp an – die Beträge kannst du danach antippen und ändern.</p>
+          <button type="button" class="btn primary wide" id="potTemplate">⛽ Tanken 200 € · 🛒 Einkaufen 150 € · 🎉 Lifestyle 50 €</button>
+        </div>
+        <div id="potList" class="stack"></div>
+        <p class="muted small">💡 Euren Anteil an der Kasse tragt ihr jeweils unter „Kosten → Fixkosten“ ein (z. B. „Haushaltskasse 200 €“), dann stimmt auch euer persönlicher Rest.</p>
       </section>
 
       <!-- Auswertung & Sparpotenzial -->

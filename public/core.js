@@ -1117,6 +1117,33 @@ function cleanFileName(name) {
   return String(name || 'beleg').replace(/[^\w.\- äöüÄÖÜß()]/g, '_').slice(0, 100) || 'beleg';
 }
 
+// ---------- Gemeinsame Kasse: Stand eines Topfs in einem Monat ----------
+// plan: [{from: 'JJJJ-MM', amount, carryover}] (sortiert oder nicht), entries: [{date, amount}]
+// Rest wandert in den nächsten Monat, wenn carryover gilt (auch ein Minus: überzogen = nächster Monat weniger).
+const mIdx = (ym) => { const [y, m] = ym.split('-').map(Number); return y * 12 + (m - 1); };
+const mStr = (i) => `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
+function potStatus(plan, entries, month) {
+  const steps = [...(plan || [])].sort((a, b) => a.from.localeCompare(b.from));
+  if (!steps.length || month < steps[0].from) return { active: false, carryIn: 0, amount: 0, spent: 0, available: 0, carryover: true };
+  const spentBy = {};
+  for (const e of entries || []) { const k = String(e.date).slice(0, 7); spentBy[k] = (spentBy[k] || 0) + Number(e.amount); }
+  let carry = 0;
+  for (let i = mIdx(steps[0].from); i <= mIdx(month); i++) {
+    const m = mStr(i);
+    const step = steps.filter((s) => s.from <= m).pop();
+    const spent = round2(spentBy[m] || 0);
+    const available = round2(carry + Number(step.amount) - spent);
+    if (m === month) return { active: true, carryIn: round2(carry), amount: Number(step.amount), spent, available, carryover: !!step.carryover };
+    carry = step.carryover ? available : 0;
+  }
+  return { active: false, carryIn: 0, amount: 0, spent: 0, available: 0, carryover: true };
+}
+// Plan ab einem Monat ändern (frühere Monate bleiben wie sie waren)
+function potPlanUpdate(plan, month, amount, carryover) {
+  const rest = (plan || []).filter((s) => s.from < month);
+  return [...rest, { from: month, amount: round2(Number(amount)), carryover: !!carryover }];
+}
+
 return { createCore, HttpError, CATEGORIES, INTERVALS, UPLOAD_TYPES, MAX_UPLOAD, fileMatchesType, cleanFileName,
-  round2, str, num, dateStr, monthStr };
+  round2, str, num, dateStr, monthStr, potStatus, potPlanUpdate };
 });

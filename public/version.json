@@ -1,7 +1,8 @@
 {
-  "version": "2026.11.23-3",
+  "version": "2026.11.23-4",
   "notes": [
-    "🔄 Updates kommen jetzt von selbst: Beim Öffnen lädt die App die neue Version automatisch.",
-    "🛡️ Der Besitzer der App kann Konten sperren oder entfernen (erst nach „⋯ Verwalten“ und mit Bestätigung)."
+    "🧺 Neu: Gemeinsame Kasse für euren Haushalt – z. B. ⛽ Tanken, 🛒 Einkaufen, 🎉 Lifestyle mit festem Monatsbudget.",
+    "📷 Kassenbon scannen: Die App erkennt den Betrag und ordnet ihn automatisch der passenden Kasse zu – ihr bestätigt nur noch.",
+    "↪️ Was übrig bleibt, wandert automatisch in den nächsten Monat. Ihr seht beide denselben Stand, wer was ausgegeben hat und den Bon."
   ]
 }

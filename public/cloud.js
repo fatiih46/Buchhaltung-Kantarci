@@ -369,6 +369,103 @@
   }
 
   // ---------- Öffentliche Schnittstelle (ersetzt fetch('/api/...')) ----------
+  // ---------- Gemeinsame Kasse (gehört dem Haushalt) ----------
+  const toNum = (v) => Number(v);
+  const UUID = '([0-9a-f-]{36})';
+  async function potsFor(query) {
+    const month = C.monthStr(query.get('month'));
+    const [pots, entries, members] = await Promise.all([
+      sb.from('pots').select('*').order('created_at'),
+      sb.from('pot_entries').select('*').order('date'),
+      sb.from('members').select('user_id, name'),
+    ]);
+    if (pots.error || entries.error || members.error) throw offline(pots.error || entries.error || members.error);
+    const names = Object.fromEntries(members.data.map((m) => [m.user_id, m.name]));
+    const monthEntries = entries.data.filter((e) => String(e.date).slice(0, 7) === month);
+    const paths = monthEntries.filter((e) => e.file_path).map((e) => e.file_path);
+    const urls = {};
+    if (paths.length) {
+      const { data } = await sb.storage.from(BUCKET).createSignedUrls(paths, 3600);
+      (data || []).forEach((x) => { if (x.signedUrl) urls[x.path] = x.signedUrl; });
+    }
+    const list = pots.data.map((p) => {
+      const mine = entries.data.filter((e) => e.pot_id === p.id);
+      return {
+        id: p.id, name: p.name, icon: p.icon, categories: p.categories || [], plan: p.plan,
+        ...C.potStatus(p.plan, mine, month),
+        entries: monthEntries.filter((e) => e.pot_id === p.id).sort((a, b) => String(b.date).localeCompare(String(a.date)))
+          .map((e) => ({ id: e.id, date: String(e.date).slice(0, 10), amount: toNum(e.amount), shop: e.shop, note: e.note,
+            who: e.user_id ? (names[e.user_id] || 'gelöschtes Konto') : 'gelöschtes Konto', mine: e.user_id === auth.uid,
+            fileType: e.file_type, url: e.file_path ? urls[e.file_path] || '' : '' })),
+      };
+    });
+    const sum = (k) => C.round2(list.filter((x) => x.active).reduce((s, x) => s + x[k], 0));
+    return { month, pots: list, totals: { amount: sum('amount'), carryIn: sum('carryIn'), spent: sum('spent'), available: sum('available') } };
+  }
+  function potFields(body) {
+    const name = C.str(body.name, 'Name', 40);
+    const icon = typeof body.icon === 'string' && body.icon.trim() ? body.icon.trim().slice(0, 8) : '💰';
+    const amount = C.num(body.amount, 'Betrag pro Monat');
+    const carryover = body.carryover === true || body.carryover === 'on' || body.carryover === '1';
+    const cats = (Array.isArray(body.categories) ? body.categories : String(body.categories || '').split('|'))
+      .filter((k) => C.CATEGORIES.includes(k));
+    return { name, icon, amount, carryover, categories: cats, month: C.monthStr(body.month) };
+  }
+  async function createPot(body) {
+    const f = potFields(body);
+    const { data, error } = await sb.from('pots').insert({ household_id: member.household_id, name: f.name, icon: f.icon,
+      categories: f.categories, plan: [{ from: f.month, amount: f.amount, carryover: f.carryover }] }).select('id');
+    if (error) throw offline(error);
+    return { ok: true, id: data[0].id };
+  }
+  async function updatePot(id, body) {
+    const f = potFields(body);
+    const cur = await sb.from('pots').select('plan').eq('id', id).maybeSingle();
+    if (cur.error) throw offline(cur.error);
+    if (!cur.data) throw new HttpError(404, 'Nicht gefunden.');
+    const { error } = await sb.from('pots').update({ name: f.name, icon: f.icon, categories: f.categories,
+      plan: C.potPlanUpdate(cur.data.plan, f.month, f.amount, f.carryover) }).eq('id', id);
+    if (error) throw offline(error);
+    return { ok: true };
+  }
+  async function deletePotRow(table, id) {
+    // Kassenbons zuerst löschen (solange die Ausgabe noch existiert, erlaubt das die Regel dem ganzen Haushalt)
+    const paths = table === 'pot_entries'
+      ? [(await sb.from('pot_entries').select('file_path').eq('id', id).maybeSingle()).data?.file_path].filter(Boolean)
+      : ((await sb.from('pot_entries').select('file_path').eq('pot_id', id)).data || []).map((e) => e.file_path).filter(Boolean);
+    if (paths.length) await sb.storage.from(BUCKET).remove(paths).catch(() => {});
+    const { error } = await sb.from(table).delete().eq('id', id);
+    if (error) throw offline(error);
+    return { ok: true };
+  }
+  // Ausgabe aus der Kasse, optional mit Kassenbon-Foto (liegt im eigenen Ordner, der Haushalt darf es ansehen)
+  Cloud.addPotEntry = async (body, file) => {
+    await init();
+    await ensureData();
+    const date = C.dateStr(body.date);
+    const amount = C.num(body.amount, 'Betrag', { min: 0.01 });
+    if (!body.pot_id) throw new HttpError(400, 'Bitte eine Kasse auswählen.');
+    let filePath = null, fileType = null;
+    if (file) {
+      const ftype = String(file.type || '').toLowerCase();
+      if (!C.UPLOAD_TYPES[ftype]) throw new HttpError(415, 'Nur Fotos (JPG, PNG, WEBP, HEIC) oder PDF erlaubt.');
+      if (file.size > C.MAX_UPLOAD) throw new HttpError(413, 'Datei zu groß (max. 8 MB).');
+      const rand = crypto.getRandomValues(new Uint8Array(16)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
+      filePath = `${auth.uid}/kasse-${rand}${C.UPLOAD_TYPES[ftype]}`;
+      const up = await sb.storage.from(BUCKET).upload(filePath, file, { contentType: ftype, upsert: false });
+      if (up.error) throw new HttpError(400, `Upload fehlgeschlagen: ${up.error.message}`);
+      fileType = ftype;
+    }
+    const { error } = await sb.from('pot_entries').insert({ pot_id: body.pot_id, household_id: member.household_id, user_id: auth.uid,
+      date, amount, shop: String(body.shop || '').trim().slice(0, 60), note: String(body.note || '').trim().slice(0, 200),
+      file_path: filePath, file_type: fileType });
+    if (error) {
+      if (filePath) sb.storage.from(BUCKET).remove([filePath]).catch(() => {});
+      throw offline(error);
+    }
+    return { ok: true };
+  };
+
   Cloud.api = async (method, url, body) => {
     await init();
     const u = new URL(url, location.href);
@@ -388,6 +485,13 @@
     if (path === '/api/me') return me();
     await ensureData();
     if (path === '/api/household') return household(u.searchParams);
+    if (path === '/api/pots' && method === 'GET') return potsFor(u.searchParams);
+    if (path === '/api/pots' && method === 'POST') return createPot(input);
+    let pm = path.match(new RegExp(`^/api/pots/${UUID}$`));
+    if (pm && method === 'PUT') return updatePot(pm[1], input);
+    if (pm && method === 'DELETE') return deletePotRow('pots', pm[1]);
+    pm = path.match(new RegExp(`^/api/pot-entries/${UUID}$`));
+    if (pm && method === 'DELETE') return deletePotRow('pot_entries', pm[1]);
     if (path === '/api/attachments' && method === 'GET') return attachments(u.searchParams);
     if (!core.match(method, path)) throw new HttpError(404, 'Nicht gefunden.');
     const call = () => {

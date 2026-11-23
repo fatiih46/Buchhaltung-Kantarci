@@ -11,6 +11,7 @@
       insert(v) { q.action = 'insert'; q.values = v; return b; },
       update(v) { q.action = 'update'; q.values = v; return b; },
       upsert(v) { q.action = 'upsert'; q.values = v; return b; },
+      delete() { q.action = 'delete'; return b; },
       eq(c, v) { q.filters.push([c, v]); return b; },
       order(c) { q.order = c; return b; },
       maybeSingle() { q.mode = 'maybe'; return b; },

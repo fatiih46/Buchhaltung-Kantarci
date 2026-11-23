@@ -259,6 +259,7 @@ async function boot() {
   $('#app').hidden = false;
   $('#hhName').textContent = state.me.household.name;
   $('#hello').textContent = `Hallo ${state.me.user.name}`;
+  $('.topnav [data-tab=kasse]').hidden = !window.Cloud?.enabled; // gemeinsame Kasse braucht die Cloud
   // bestehende Konten: Hinweis einmal anzeigen; danach (oder sonst) einmal „Neu in dieser Version“
   if (noticeJustAccepted) { noticeJustAccepted = false; rememberNotice(); showNewsOnce({ skip: true }); }
   else if (!noticeSeen()) showNotice().then(rememberNotice).then(() => showNewsOnce());
@@ -278,6 +279,7 @@ async function render() {
   try {
     if (state.tab === 'overview') await renderOverview();
     if (state.tab === 'kosten') await renderKosten();
+    if (state.tab === 'kasse') await renderKasse();
     if (state.tab === 'stats') await renderStats();
     if (LIST_TABS.includes(state.tab)) await renderLists();
     if (state.tab === 'household') await renderHousehold();
@@ -418,6 +420,86 @@ async function renderPlan() {
 }
 $('#addIncome').addEventListener('click', () => openIncomeDialog());
 $('#addFixed').addEventListener('click', () => openFixedDialog());
+
+// ---------- Gemeinsame Kasse ----------
+const POT_ICONS = ['⛽', '🛒', '🎉', '🍽️', '🏠', '👶', '💊', '🎁', '✈️', '🐾', '💰'];
+const POT_TEMPLATES = [
+  { name: 'Tanken', icon: '⛽', amount: 200, categories: ['Auto & Verschleiß'] },
+  { name: 'Einkaufen', icon: '🛒', amount: 150, categories: ['Einkaufen & Lebensmittel', 'Drogerie & Haushalt'] },
+  { name: 'Lifestyle', icon: '🎉', amount: 50, categories: ['Freizeit', 'Essen gehen & Lieferdienste'] },
+];
+let potCache = [];
+async function renderKasse() {
+  const k = await api('GET', `/api/pots?month=${state.month}`);
+  potCache = k.pots;
+  const active = k.pots.filter((p) => p.active);
+  $('#potEmpty').hidden = k.pots.length > 0;
+  $('#kasseTotals').innerHTML = active.length ? `
+    <div><small>Noch übrig</small><strong class="${k.totals.available < 0 ? 'neg' : 'pos'}">${fmt(k.totals.available)}</strong></div>
+    <div><small>Ausgegeben</small><strong>${fmt(k.totals.spent)}</strong></div>
+    <div><small>Budget / Monat</small><strong>${fmt(k.totals.amount)}</strong></div>
+    ${k.totals.carryIn ? `<div><small>Übertrag Vormonat</small><strong class="${k.totals.carryIn < 0 ? 'neg' : ''}">${fmt(k.totals.carryIn)}</strong></div>` : ''}` : '';
+  $('#potList').innerHTML = k.pots.map((p) => {
+    if (!p.active) return `<div class="card pot"><div class="pot-head" data-pot-edit="${p.id}"><span class="pot-icon">${esc(p.icon)}</span>
+      <div class="grow"><div class="title">${esc(p.name)}</div><div class="meta">startet erst später</div></div></div></div>`;
+    const total = Math.max(0, p.carryIn + p.amount);
+    const pct = total > 0 ? Math.min(100, (p.spent / total) * 100) : 100;
+    return `<div class="card pot">
+      <div class="pot-head" data-pot-edit="${p.id}" title="Antippen zum Ändern">
+        <span class="pot-icon">${esc(p.icon)}</span>
+        <div class="grow"><div class="title">${esc(p.name)} <span class="muted small">✎</span></div>
+          <div class="meta">${fmt(p.amount)} / Monat${p.carryIn ? ` · Übertrag ${p.carryIn > 0 ? '+' : ''}${fmt(p.carryIn)}` : ''} · ausgegeben ${fmt(p.spent)}${p.carryover ? '' : ' · ohne Übertrag'}</div></div>
+        <div class="right"><div class="pot-avail num ${p.available < 0 ? 'neg' : 'pos'}">${fmt(p.available)}</div><div class="meta">${p.available < 0 ? 'überzogen' : 'noch übrig'}</div></div>
+      </div>
+      <div class="progress ${p.available < 0 ? 'over' : ''}"><i style="width:${pct}%"></i></div>
+      ${p.entries.length ? `<ul class="list compact pot-entries">${p.entries.map((e) => `<li>
+        <div class="main"><div class="title">${esc(e.shop || e.note || 'Ausgabe')}${e.url ? ` <a class="clip" href="${esc(e.url)}" target="_blank" rel="noopener">📎</a>` : ''}</div>
+          <div class="meta">${fmtDate(e.date)} · ${esc(e.who)}${e.note && e.shop ? ' · ' + esc(e.note) : ''}</div></div>
+        <div class="right num neg">−${fmt(e.amount)}</div>
+        ${delBtn(`/api/pot-entries/${e.id}`, `${e.shop || 'Ausgabe'} ${fmt(e.amount)}`, `Der Betrag geht zurück in die Kasse „${p.name}“.`)}
+      </li>`).join('')}</ul>` : '<p class="muted small" style="margin:.5rem 0">Noch keine Ausgaben in diesem Monat.</p>'}
+      <button type="button" class="btn small" data-pot-spend="${p.id}">＋ Ausgabe / 📷 Kassenbon</button>
+    </div>`;
+  }).join('');
+}
+$('#potList').addEventListener('click', (e) => {
+  const edit = e.target.closest('[data-pot-edit]');
+  const spend = e.target.closest('[data-pot-spend]');
+  if (edit) openPotDialog(potCache.find((p) => p.id === edit.dataset.potEdit));
+  if (spend) openEntryDialog({ kind: 'mehr', potId: spend.dataset.potSpend });
+});
+$('#potAdd').addEventListener('click', () => openPotDialog());
+$('#potTemplate').addEventListener('click', async () => {
+  try {
+    for (const t of POT_TEMPLATES) await api('POST', '/api/pots', { ...t, carryover: true, month: state.month });
+    toast('Kassen angelegt – Beträge antippen zum Ändern');
+    render();
+  } catch (err) { toast(err.message); }
+});
+function openPotDialog(pot) {
+  const icon = pot?.icon || '💰';
+  const cats = pot?.categories || [];
+  openDialog({
+    title: pot ? `${pot.icon} ${pot.name} bearbeiten` : 'Neue Kasse',
+    html: `
+      <div class="row2">
+        <label>Name <input name="name" required maxlength="40" value="${esc(pot?.name)}" placeholder="z. B. Tanken"></label>
+        <label>Symbol <select name="icon">${POT_ICONS.map((i) => `<option ${i === icon ? 'selected' : ''}>${i}</option>`).join('')}</select></label>
+      </div>
+      ${amountInput(pot?.amount, 'Betrag pro Monat (€)')}
+      <label class="check"><input type="checkbox" name="carryover" ${!pot || pot.carryover ? 'checked' : ''}> Was übrig bleibt, in den nächsten Monat übertragen</label>
+      <fieldset class="cat-pick"><legend>Kassenbons hierher zuordnen, wenn die Kategorie ist:</legend>
+        ${state.meta.categories.map((c) => `<label class="check"><input type="checkbox" name="categories" value="${esc(c)}" ${cats.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('')}
+      </fieldset>
+      <div class="hint">${pot ? `Änderungen am Betrag gelten ab ${monthLabel(state.month)} – frühere Monate bleiben, wie sie waren.` : `Die Kasse startet im ${monthLabel(state.month)}.`}</div>`,
+    onSave: (d) => {
+      d.categories = $$('#dlgBody [name=categories]:checked').map((x) => x.value).join('|');
+      d.month = state.month;
+      return pot ? api('PUT', `/api/pots/${pot.id}`, d) : api('POST', '/api/pots', d);
+    },
+    onDelete: pot && (() => api('DELETE', `/api/pots/${pot.id}`)),
+  });
+}
 
 // ---------- Variable Ausgaben ----------
 async function renderEntries() {
@@ -809,6 +891,7 @@ async function loadShops() {
 function openEntryDialog(item = {}) {
   const isEdit = !!item.id;
   const kind = item.kind || 'mehr';
+  const withPots = !isEdit && kind === 'mehr' && !!window.Cloud?.enabled;
   loadShops();
   openDialog({
     title: isEdit ? 'Eintrag bearbeiten' : (kind === 'mehr' ? 'Neue Ausgabe' : 'Einnahme / Erstattung'),
@@ -817,7 +900,9 @@ function openEntryDialog(item = {}) {
         <label class="btn scan-btn">📷 Kassenbon scannen<input type="file" accept="image/*" capture="environment" data-scan hidden></label>
         <div class="muted small" data-scan-status>Betrag, Geschäft und Datum werden automatisch eingetragen – du prüfst und speicherst.</div>
       </div>`}
-      <fieldset>
+      ${withPots ? `<label data-paid-from hidden>Bezahlt aus
+        <select name="paid_from"><option value="">👤 Meinem eigenen Geld</option></select></label>` : ''}
+      <fieldset data-kind-box>
         <legend>Art</legend>
         <label class="radio"><input type="radio" name="kind" value="mehr" ${kind === 'mehr' ? 'checked' : ''}> Ausgabe</label>
         <label class="radio"><input type="radio" name="kind" value="weniger" ${kind === 'weniger' ? 'checked' : ''}> Einnahme / Erstattung (z. B. Verkauf, Rücksendung)</label>
@@ -840,6 +925,32 @@ function openEntryDialog(item = {}) {
         const hit = shopCache.find((x) => x.shop.toLowerCase() === shop.value.trim().toLowerCase());
         if (hit?.category) sel.value = hit.category;
       });
+      // gemeinsame Kassen laden; nach dem Scannen passende Kasse anhand der Kategorie wählen
+      const paid = $('[name=paid_from]', body);
+      if (paid) {
+        let paidTouched = !!item.potId;
+        const syncPaid = () => {
+          const pot = !!paid.value;
+          $('[data-kind-box]', body).hidden = pot;
+          $('.att-pick .att-label', body)?.replaceChildren(pot ? 'Kassenbon (für euch beide sichtbar)' : 'Beleg / Kassenbon (optional)');
+        };
+        paid.addEventListener('change', () => { paidTouched = true; syncPaid(); });
+        api('GET', `/api/pots?month=${state.month}`).then((k) => {
+          const pots = k.pots.filter((p) => p.active);
+          if (!pots.length || !body.isConnected) return;
+          paid.insertAdjacentHTML('beforeend', pots.map((p) => `<option value="${p.id}">${esc(p.icon)} Kasse ${esc(p.name)} (noch ${fmt(p.available)})</option>`).join(''));
+          $('[data-paid-from]', body).hidden = false;
+          if (item.potId) paid.value = item.potId;
+          syncPaid();
+          const pickPot = (r) => {
+            if (paidTouched || !r || !r.category) return;
+            const hit = pots.find((p) => (p.categories || []).includes(r.category));
+            if (hit) { paid.value = hit.id; paid.classList.add('auto-filled'); syncPaid(); }
+          };
+          body.addEventListener('scanned', (ev) => pickPot(ev.detail));
+          pickPot(body.lastScan); // falls der Scan schon fertig war
+        }).catch(() => {});
+      }
       $('[data-scan]', body)?.addEventListener('change', (e) => {
         const file = e.target.files[0];
         e.target.value = '';
@@ -848,6 +959,13 @@ function openEntryDialog(item = {}) {
     },
     onSave: async (d) => {
       if (isEdit) return api('PUT', `/api/entries/${item.id}`, d);
+      if (d.paid_from) {
+        // Ausgabe aus der gemeinsamen Kasse (Kassenbon für den Haushalt sichtbar)
+        const file = pendingFiles[0] ? await shrinkImage(pendingFiles[0]) : null;
+        await Cloud.addPotEntry({ pot_id: d.paid_from, date: d.date, amount: d.amount, shop: d.shop, note: d.note }, file);
+        pendingFiles = [];
+        return;
+      }
       const { id } = await api('POST', '/api/entries', d);
       await uploadPending('entry', id);
     },
@@ -925,7 +1043,9 @@ async function scanInto(root, file) {
   }
   if (r.shop) { const el = $('[name=shop]', root); el.value = r.shop; mark(el); found.push('Geschäft'); }
   if (r.date) { const el = $('[name=date]', root); el.value = r.date; mark(el); found.push('Datum'); }
-  if (r.category) { const el = $('[name=category]', root); el.value = r.category; mark(el); }
+  if (r.category && $('[name=category]', root)) { const el = $('[name=category]', root); el.value = r.category; mark(el); }
+  root.lastScan = r;
+  root.dispatchEvent(new CustomEvent('scanned', { detail: r }));
   if (found.length) {
     status.className = 'small scan-status ok';
     status.textContent = `✅ Erkannt: ${found.join(', ')}. Bitte prüfen (farbig markiert) und auf „Speichern“ tippen.`;

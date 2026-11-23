@@ -238,6 +238,76 @@ function staticServer() {
   assert.equal(await fatih.isVisible('#newsDlg'), false, 'nur einmal');
   serverVersion = { version: LOADED_VERSION, notes: [] };
 
+  // ---------- 6d. Gemeinsame Kasse ----------
+  const realNow = new Date();
+  const curYm = `${realNow.getFullYear()}-${String(realNow.getMonth() + 1).padStart(2, '0')}`;
+  const nextD = new Date(realNow.getFullYear(), realNow.getMonth() + 1, 1);
+  const nextYm = `${nextD.getFullYear()}-${String(nextD.getMonth() + 1).padStart(2, '0')}`;
+  await fatih.evaluate((m) => { state.month = m; switchTab('kasse'); }, curYm);
+  await fatih.waitForSelector('#potEmpty:not([hidden])');
+  await fatih.click('#potTemplate');
+  await fatih.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 3);
+  assert.match(await fatih.textContent('#kasseTotals'), /Noch übrig\s*400,00/);
+  // Partnerin sieht dieselben Kassen und scannt einen Tankbeleg -> landet automatisch in „Tanken“
+  await frau.evaluate((m) => { state.month = m; switchTab('kasse'); }, curYm);
+  await frau.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 3);
+  const dd = `${String(realNow.getDate()).padStart(2, '0')}.${String(realNow.getMonth() + 1).padStart(2, '0')}.${realNow.getFullYear()}`;
+  const tankPage = await browser.newPage({ viewport: { width: 640, height: 520 } });
+  await tankPage.setContent(`<body style="margin:0;background:#fff"><pre style="font:26px/1.45 'DejaVu Sans Mono',monospace;color:#111;padding:24px;margin:0">
+     ARAL Tankstelle
+   Hauptstrasse 1
+
+Super E10   34,17 l
+--------------------------
+SUMME EUR            61,50
+Geg. EC-Karte        61,50
+
+${dd}      17:12
+</pre></body>`);
+  const tankPng = await tankPage.screenshot();
+  await tankPage.close();
+  await frau.click('#fab');
+  const [ch2] = await Promise.all([frau.waitForEvent('filechooser'), frau.click('[data-qa=scan]')]);
+  await ch2.setFiles({ name: 'tanken.png', mimeType: 'image/png', buffer: tankPng });
+  await frau.waitForFunction(() => /Erkannt/.test(document.querySelector('[data-scan-status]').textContent), null, { timeout: 180000 });
+  await frau.waitForFunction(() => { const s = document.querySelector('#dlgBody [name=paid_from]'); return s && s.selectedOptions[0].textContent.includes('Tanken'); });
+  assert.equal(await frau.inputValue('#dlgBody [name=amount]'), '61,50');
+  assert.equal(await frau.isVisible('#dlgBody [data-kind-box]'), false, 'bei Kasse keine Art-Auswahl');
+  await frau.waitForTimeout(250);
+  await shot(frau, 'cloud-19-kasse-scan.png');
+  await frau.click('#dlgForm button[type=submit]');
+  await frau.waitForSelector('#dlg', { state: 'hidden' });
+  await frau.waitForFunction(() => document.querySelector('#potList').textContent.includes('Aral'));
+  assert.equal((await api(frau, 'GET', '/api/entries?month=' + curYm)).some((e) => e.amount === 61.5), false, 'nicht in den privaten Ausgaben');
+  // Besitzer sieht den Abzug, wer es war und den Kassenbon
+  await fatih.evaluate(() => render());
+  await fatih.waitForFunction(() => document.querySelector('#potList').textContent.includes('Aral'));
+  const k1 = await api(fatih, 'GET', `/api/pots?month=${curYm}`);
+  const tank = k1.pots.find((p) => p.name === 'Tanken');
+  assert.equal(tank.available, 138.5);
+  assert.equal(tank.entries[0].who, 'Partnerin');
+  assert.ok(tank.entries[0].url.startsWith('data:image/'), 'Kassenbon für den Haushalt sichtbar');
+  assert.equal(k1.totals.available, 338.5);
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-20-kasse.png', true);
+  // nächster Monat: Rest wird übertragen
+  const k2 = await api(fatih, 'GET', `/api/pots?month=${nextYm}`);
+  const tank2 = k2.pots.find((p) => p.name === 'Tanken');
+  assert.equal(tank2.carryIn, 138.5);
+  assert.equal(tank2.available, 338.5);
+  // Betrag ab nächstem Monat ändern: dieser Monat bleibt gleich
+  const eink = k1.pots.find((p) => p.name === 'Einkaufen');
+  await api(fatih, 'PUT', `/api/pots/${eink.id}`, { name: 'Einkaufen', icon: '🛒', amount: '180', carryover: 'on', categories: eink.categories.join('|'), month: nextYm });
+  assert.equal((await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Einkaufen').amount, 150);
+  assert.equal((await api(fatih, 'GET', `/api/pots?month=${nextYm}`)).pots.find((p) => p.name === 'Einkaufen').available, 330);
+  // „−“: Ausgabe der Kasse löschen -> Betrag zurück
+  fatih.once('dialog', (d) => d.accept());
+  await fatih.click('#potList .pot-entries .del-btn');
+  await fatih.waitForFunction(() => !document.querySelector('#potList').textContent.includes('Aral'));
+  assert.equal((await api(fatih, 'GET', `/api/pots?month=${curYm}`)).totals.available, 400);
+  await fatih.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
+  await frau.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
+
   // ---------- 7. Zweites Gerät von Fatih: gleichzeitige Änderungen gehen nicht verloren ----------
   const handy = await newPage('handy');
   await handy.fill('#loginForm [name=email]', 'FATIH@example.com');
@@ -382,8 +452,13 @@ Geg. EC-Karte         7,67
   assert.equal(await fatih.inputValue('#dlgBody [name=shop]'), 'Rewe');
   assert.equal(await fatih.inputValue('#dlgBody [name=date]'), '2026-11-20');
   assert.equal(await fatih.inputValue('#dlgBody [name=category]'), 'Einkaufen & Lebensmittel');
-  assert.equal((await fatih.$$('#dlgBody .auto-filled')).length, 4, 'erkannte Felder markiert');
+  // Betrag, Geschäft, Datum, Kategorie – und „Bezahlt aus“ (es gibt jetzt die Kasse „Einkaufen“)
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=paid_from]').selectedOptions[0].textContent.includes('Einkaufen'));
+  assert.equal((await fatih.$$('#dlgBody .auto-filled')).length, 5, 'erkannte Felder markiert');
   assert.equal((await fatih.$$('#dlgBody [data-pending] .att-thumb')).length, 1, 'Foto als Beleg angehängt');
+  // diesmal privat bezahlt: von Hand auf „Meinem eigenen Geld“ umstellen
+  await fatih.selectOption('#dlgBody [name=paid_from]', '');
+  assert.equal(await fatih.isVisible('#dlgBody [data-kind-box]'), true);
   await shot(fatih, 'cloud-11-kassenbon-erkannt.png');
   await fatih.click('#dlgForm button[type=submit]');
   await fatih.waitForSelector('#dlg', { state: 'hidden' });

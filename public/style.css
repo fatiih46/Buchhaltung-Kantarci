@@ -417,3 +417,13 @@ dialog[open]::backdrop { animation: fade-in .16s ease-out; }
 .admin-row.banned .title, .admin-row.banned .meta { opacity: .6; }
 .pill.banned-pill { background: var(--danger-soft); color: var(--danger); }
 .manage-btn { margin-top: .4rem; font: inherit; font-size: .85rem; color: var(--muted); background: none; border: 1px dashed var(--line); border-radius: 8px; padding: .25rem .6rem; cursor: pointer; }
+
+/* Gemeinsame Kasse */
+.pot .pot-head { display: flex; align-items: center; gap: .7rem; cursor: pointer; }
+.pot .pot-icon { font-size: 1.9rem; line-height: 1; }
+.pot .pot-avail { font-size: 1.35rem; font-weight: 800; }
+.pot .progress { margin: .7rem 0 .4rem; }
+.pot .progress.over i { background: var(--danger); }
+.pot .pot-entries { margin: .3rem 0 .6rem; }
+.cat-pick { display: flex; flex-direction: column; gap: .25rem; max-height: 220px; overflow-y: auto; }
+.cat-pick label.check { font-size: .9rem; }
