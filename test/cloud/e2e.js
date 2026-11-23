@@ -29,11 +29,15 @@ function staticServer() {
   // unter einem Unterordner ausliefern (wie GitHub Pages), damit relative Pfade geprüft werden
   const base = `http://localhost:${srv.address().port}/app/`;
   const browser = await chromium.launch();
+  // Versionsdatei: standardmäßig dieselbe Version ohne Neuerungen; einzelne Tests simulieren ein Update
+  const LOADED_VERSION = JSON.parse(fs.readFileSync(path.join(PUB, 'version.json'), 'utf8')).version;
+  let serverVersion = { version: LOADED_VERSION, notes: [] };
   const errors = [];
   async function newPage(name) {
     const ctx = await browser.newContext({ viewport: { width: 400, height: 860 }, deviceScaleFactor: 2, locale: 'de-DE' });
     await ctx.exposeFunction('__sb', backend.handle);
     await ctx.route('**/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.HAUSHALT_CONFIG = { supabaseUrl: 'https://test.supabase.co', supabaseKey: 'test' };" }));
+    await ctx.route('**/version.json*', (r) => r.fulfill({ contentType: 'application/json', body: JSON.stringify(serverVersion) }));
     await ctx.route('**/vendor/supabase.js', (r) => r.fulfill({ contentType: 'text/javascript', body: fs.readFileSync(path.join(__dirname, 'fake-supabase-client.js'), 'utf8') }));
     const page = await ctx.newPage();
     page.on('pageerror', (e) => errors.push(`${name}: ${e.message}`));
@@ -207,6 +211,29 @@ function staticServer() {
   await frau.waitForSelector('#app:not([hidden])');
   await frau.waitForTimeout(300);
   assert.equal(await frau.isVisible('#noticeDlg'), false, 'danach nicht mehr');
+
+  // ---------- 6c. Update-Hinweis und „Neu in dieser Version“ ----------
+  assert.equal(await fatih.isVisible('#updateBar'), false);
+  serverVersion = { version: '2099.01.01', notes: ['Etwas Neues'] }; // auf Netlify liegt eine neuere Version
+  await fatih.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); // zurück in die App
+  await fatih.waitForSelector('#updateBar:not([hidden])');
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-16-update-verfuegbar.png');
+  // nach dem Neuladen ist die neue Version da: einmal zeigen, was neu ist
+  serverVersion = { version: LOADED_VERSION, notes: ['📷 Kassenbon scannen', '🔔 Update-Hinweis'] };
+  await fatih.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('version-gesehen-')).forEach((k) => localStorage.removeItem(k)));
+  await fatih.click('#updateNow');
+  await fatih.waitForSelector('#newsDlg[open]');
+  assert.match(await fatih.textContent('#newsList'), /Kassenbon scannen.*Update-Hinweis/s);
+  assert.equal(await fatih.isVisible('#updateBar'), false, 'aktuelle Version: kein Update-Hinweis');
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-17-neu-in-version.png');
+  await fatih.click('#newsOk');
+  await fatih.reload();
+  await fatih.waitForSelector('#app:not([hidden])');
+  await fatih.waitForTimeout(400);
+  assert.equal(await fatih.isVisible('#newsDlg'), false, 'nur einmal');
+  serverVersion = { version: LOADED_VERSION, notes: [] };
 
   // ---------- 7. Zweites Gerät von Fatih: gleichzeitige Änderungen gehen nicht verloren ----------
   const handy = await newPage('handy');

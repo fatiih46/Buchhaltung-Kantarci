@@ -142,6 +142,37 @@ $('#forgotPw').addEventListener('click', async () => {
     authMessage({ info: true, message: 'Wir haben dir eine E-Mail geschickt. Tippe auf den Link darin und lege danach ein neues Passwort fest.' });
   } catch (err) { authMessage(err); }
 });
+// ---------- Updates: neue Version erkennen und anbieten ----------
+// Die geladene Version steht im <meta name="app-version">, die aktuelle in version.json (auf dem Server).
+const LOADED_VERSION = document.querySelector('meta[name=app-version]')?.content || '';
+async function fetchVersion() {
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    return res.ok ? await res.json() : null;
+  } catch { return null; } // offline – später erneut
+}
+async function checkForUpdate() {
+  const v = await fetchVersion();
+  if (v && v.version && v.version !== LOADED_VERSION) $('#updateBar').hidden = false;
+}
+$('#updateNow').addEventListener('click', () => location.reload());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
+setInterval(checkForUpdate, 15 * 60 * 1000);
+// nach einem Update einmal zeigen, was neu ist
+const newsKey = () => `version-gesehen-${state.me.user.id}`;
+async function showNewsOnce({ skip = false } = {}) {
+  let seen = null;
+  try { seen = localStorage.getItem(newsKey()); } catch { /* privates Fenster */ }
+  const remember = () => { try { localStorage.setItem(newsKey(), LOADED_VERSION); } catch { /* egal */ } };
+  if (seen === LOADED_VERSION) return;
+  if (skip) { remember(); return; }
+  const v = await fetchVersion();
+  if (!v || v.version !== LOADED_VERSION || !v.notes?.length) { remember(); return; }
+  $('#newsList').innerHTML = v.notes.map((n) => `<li>${esc(n)}</li>`).join('');
+  $('#newsDlg').showModal();
+  $('#newsOk').onclick = () => { $('#newsDlg').close(); remember(); };
+}
+
 // ---------- Hinweis zur Nutzung ----------
 let noticeJustAccepted = false;
 let noticeOkInSession = false; // bei mehreren Versuchen (z. B. Tippfehler im Code) nicht jedes Mal fragen
@@ -206,9 +237,11 @@ async function boot() {
   $('#app').hidden = false;
   $('#hhName').textContent = state.me.household.name;
   $('#hello').textContent = `Hallo ${state.me.user.name}`;
-  // bestehende Konten: Hinweis einmal anzeigen
-  if (noticeJustAccepted) { noticeJustAccepted = false; rememberNotice(); }
-  else if (!noticeSeen()) showNotice().then(rememberNotice);
+  // bestehende Konten: Hinweis einmal anzeigen; danach (oder sonst) einmal „Neu in dieser Version“
+  if (noticeJustAccepted) { noticeJustAccepted = false; rememberNotice(); showNewsOnce({ skip: true }); }
+  else if (!noticeSeen()) showNotice().then(rememberNotice).then(() => showNewsOnce());
+  else showNewsOnce();
+  checkForUpdate();
   if (window.Cloud?.recovery) {
     setOldPasswordNeeded(false);
     history.replaceState(null, '', location.pathname);

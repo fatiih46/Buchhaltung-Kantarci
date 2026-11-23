@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Haushaltsbuch</title>
   <meta name="theme-color" content="#1f6f5c">
+  <!-- muss mit public/version.json übereinstimmen (wird getestet) -->
+  <meta name="app-version" content="2026.11.23">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -267,6 +269,18 @@
       <span class="spacer"></span>
       <button type="button" class="btn primary" id="noticeOk">Verstanden</button>
     </div>
+  </dialog>
+
+  <!-- Update verfügbar -->
+  <div id="updateBar" class="update-bar" role="status" hidden>
+    <span>🎉 <strong>Neue Version verfügbar</strong></span>
+    <button type="button" class="btn small" id="updateNow">Jetzt aktualisieren</button>
+  </div>
+  <!-- Neu in dieser Version -->
+  <dialog id="newsDlg" aria-labelledby="newsTitle">
+    <h2 id="newsTitle">🎉 Neu in dieser Version</h2>
+    <ul id="newsList" class="news-list"></ul>
+    <div class="dlg-actions"><span class="spacer"></span><button type="button" class="btn primary" id="newsOk">Super</button></div>
   </dialog>
 
   <!-- Schnell eintragen -->
