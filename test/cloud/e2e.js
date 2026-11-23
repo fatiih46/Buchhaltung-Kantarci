@@ -333,6 +333,57 @@ ${dd}      17:12
   await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=category]').value === 'Kinder');
   await fatih.click('#dlgCancel');
 
+  // ---------- 6e2. Topf „Auto“: Text wird dem Topf mit passendem Namen zugeordnet, Minus wird übertragen ----------
+  await fatih.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
+  await fatih.waitForSelector('#potList .pot');
+  await fatih.click('#potAdd');
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=name]', 'Auto');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=categories][value="Auto & Verschleiß"]').checked, null, { timeout: 5000 });
+  await fatih.selectOption('#dlgBody [name=icon]', '💰');
+  await fatih.fill('#dlgBody [name=amount]', '100');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 4);
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=ausgabe]');
+  await fatih.fill('#dlgBody [name=note]', 'Auto wieder fit gemacht');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=paid_from]').selectedOptions[0].textContent.includes('Auto ('));
+  await fatih.fill('#dlgBody [name=amount]', '250');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => /150,00\s€ überschritten/.test(document.querySelector('#potList').textContent));
+  assert.match(await fatih.textContent('#potList'), /Achtet mehr darauf oder passt das Budget an/);
+  const autoNext = (await api(fatih, 'GET', `/api/pots?month=${nextYm}`)).pots.find((p) => p.name === 'Auto');
+  assert.equal(autoNext.carryIn, -150, 'Minus wird in den nächsten Monat übertragen');
+  assert.equal(autoNext.available, -50);
+  // von Hand korrigieren, mit Grund
+  const autoCard = await fatih.$$eval('#potList .pot', (cards) => cards.findIndex((c) => c.querySelector('.title').textContent.includes('Auto')));
+  await fatih.click(`#potList .pot:nth-child(${autoCard + 1}) [data-pot-fix]`);
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=amount]', '50');
+  await fatih.click('#dlgForm button[type=submit]');
+  assert.equal(await fatih.$eval('#dlgBody [name=note]', (el) => el.validity.valueMissing), true, 'Grund ist Pflicht');
+  await fatih.fill('#dlgBody [name=note]', 'Werkstatt hat 50 € Rabatt erstattet');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelector('#potList').textContent.includes('Korrektur: Werkstatt hat 50'));
+  assert.equal((await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Auto').available, -100);
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-23-auto-ueberschritten.png', true);
+  // Budget ab nächstem Monat erhöhen, mit Grund -> Verlauf
+  const autoPot = (await api(fatih, 'GET', `/api/pots?month=${nextYm}`)).pots.find((p) => p.name === 'Auto');
+  await api(fatih, 'PUT', `/api/pots/${autoPot.id}`, { name: 'Auto', icon: '💰', amount: '200', carryover: 'on', categories: autoPot.categories.join('|'), month: nextYm, reason: 'Auto ist älter, mehr Reparaturen' });
+  await fatih.evaluate((m) => { state.month = m; render(); }, nextYm);
+  await fatih.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 4);
+  await fatih.click(`#potList .pot:nth-child(${autoCard + 1}) [data-pot-edit]`);
+  await fatih.waitForSelector('#dlg[open] .history');
+  assert.match(await fatih.textContent('#dlgBody .history'), /Auto ist älter, mehr Reparaturen/);
+  await fatih.click('#dlgCancel');
+  // Topf „Auto“ wieder entfernen, damit die weiteren Prüfungen unverändert bleiben
+  await api(fatih, 'DELETE', `/api/pots/${autoPot.id}`);
+  await fatih.evaluate((m) => { state.month = m; render(); }, curYm);
+
   // ---------- 6f. Gegenseitig ansehen (Freigabe, nur lesen) ----------
   await frau.click('[data-tab=account]');
   await frau.waitForSelector('#shareCard:not([hidden])');

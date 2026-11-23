@@ -368,3 +368,15 @@ revoke all on function public.set_share_all(boolean) from public, anon;
 revoke all on function public.shares_with_me(text) from public, anon;
 grant execute on function public.set_share_all(boolean) to authenticated;
 grant execute on function public.shares_with_me(text) to authenticated;
+
+-- ---------- Korrekturen an gemeinsamen Budgets (mit Grund, für alle nachvollziehbar) ----------
+-- kind 'ausgabe': normale Ausgabe (Betrag > 0); kind 'korrektur': Geld hinzufügen (+) oder abziehen (−), Grund Pflicht
+alter table public.pot_entries add column if not exists kind text not null default 'ausgabe';
+alter table public.pot_entries drop constraint if exists pot_entries_amount_check;
+alter table public.pot_entries drop constraint if exists pot_entries_kind_check;
+alter table public.pot_entries drop constraint if exists pot_entries_korrektur_check;
+alter table public.pot_entries add constraint pot_entries_amount_check
+  check (amount <> 0 and abs(amount) < 1000000 and (kind = 'korrektur' or amount > 0));
+alter table public.pot_entries add constraint pot_entries_kind_check check (kind in ('ausgabe', 'korrektur'));
+alter table public.pot_entries add constraint pot_entries_korrektur_check
+  check (kind <> 'korrektur' or char_length(trim(note)) > 0);

@@ -424,7 +424,7 @@ $('#addIncome').addEventListener('click', () => openIncomeDialog());
 $('#addFixed').addEventListener('click', () => openFixedDialog());
 
 // ---------- Gemeinsame Kasse ----------
-const POT_ICONS = ['⛽', '🛒', '🎉', '🍽️', '🏠', '👶', '💊', '🎁', '✈️', '🐾', '💰'];
+const POT_ICONS = ['⛽', '🚗', '🛒', '🎉', '🍽️', '🏠', '👶', '💊', '🎁', '✈️', '🐾', '💰'];
 const POT_TEMPLATES = [
   { name: 'Tanken', icon: '⛽', amount: 200, categories: ['Auto & Verschleiß'] },
   { name: 'Einkaufen', icon: '🛒', amount: 150, categories: ['Einkaufen & Lebensmittel', 'Drogerie & Haushalt'] },
@@ -450,17 +450,27 @@ async function renderKasse() {
       <div class="pot-head" data-pot-edit="${p.id}" title="Antippen zum Ändern">
         <span class="pot-icon">${esc(p.icon)}</span>
         <div class="grow"><div class="title">${esc(p.name)} <span class="muted small">✎</span></div>
-          <div class="meta">${fmt(p.amount)} / Monat${p.carryIn ? ` · Übertrag ${p.carryIn > 0 ? '+' : ''}${fmt(p.carryIn)}` : ''} · ausgegeben ${fmt(p.spent)}${p.carryover ? '' : ' · ohne Übertrag'}</div></div>
+          <div class="meta">${fmt(p.amount)} / Monat${p.carryIn ? ` · Übertrag ${p.carryIn > 0 ? '+' : ''}${fmt(p.carryIn)}` : ''}${p.corrections ? ` · Korrektur ${p.corrections > 0 ? '+' : ''}${fmt(p.corrections)}` : ''} · ausgegeben ${fmt(p.spent)}${p.carryover ? '' : ' · ohne Übertrag'}</div></div>
         <div class="right"><div class="pot-avail num ${p.available < 0 ? 'neg' : 'pos'}">${p.available < 0 ? fmt(-p.available) : fmt(p.available)}</div><div class="meta">${p.available < 0 ? 'überschritten' : 'noch übrig'}</div></div>
       </div>
       <div class="progress ${p.available < 0 ? 'over' : ''}"><i style="width:${pct}%"></i></div>
-      ${p.entries.length ? `<ul class="list compact pot-entries">${p.entries.map((e) => `<li>
+      ${p.carryIn < 0 ? `<p class="pot-warn">⚠️ Aus dem Vormonat wurden <strong>${fmt(-p.carryIn)}</strong> Überschreitung übernommen.</p>` : ''}
+      ${p.available < 0 ? `<p class="pot-warn">⚠️ ${fmt(-p.available)} überschritten – wird${p.carryover ? ' in den nächsten Monat übertragen' : ' festgehalten'}. Achtet mehr darauf oder passt das Budget an (oben antippen).</p>` : ''}
+      ${p.entries.length ? `<ul class="list compact pot-entries">${p.entries.map((e) => e.kind === 'korrektur' ? `<li class="korrektur">
+        <div class="main"><div class="title">✏️ Korrektur: ${esc(e.note)}</div>
+          <div class="meta">${fmtDate(e.date)} · ${esc(e.who)}</div></div>
+        <div class="right num ${e.amount < 0 ? 'neg' : 'pos'}">${e.amount > 0 ? '+' : '−'}${fmt(Math.abs(e.amount))}</div>
+        ${delBtn(`/api/pot-entries/${e.id}`, `Korrektur ${fmt(e.amount)}`)}
+      </li>` : `<li>
         <div class="main"><div class="title">${esc(e.shop || e.note || 'Ausgabe')}${e.url ? ` <a class="clip" href="${esc(e.url)}" target="_blank" rel="noopener">📎</a>` : ''}</div>
           <div class="meta">${fmtDate(e.date)} · ${esc(e.who)}${e.note && e.shop ? ' · ' + esc(e.note) : ''}</div></div>
         <div class="right num neg">−${fmt(e.amount)}</div>
-        ${delBtn(`/api/pot-entries/${e.id}`, `${e.shop || 'Ausgabe'} ${fmt(e.amount)}`, `Der Betrag geht zurück in die Kasse „${p.name}“.`)}
+        ${delBtn(`/api/pot-entries/${e.id}`, `${e.shop || 'Ausgabe'} ${fmt(e.amount)}`, `Der Betrag geht zurück in „${p.name}“.`)}
       </li>`).join('')}</ul>` : '<p class="muted small" style="margin:.5rem 0">Noch keine Ausgaben in diesem Monat.</p>'}
-      <button type="button" class="btn small" data-pot-spend="${p.id}">＋ Ausgabe / 📷 Kassenbon</button>
+      <div class="pot-actions">
+        <button type="button" class="btn small" data-pot-spend="${p.id}">＋ Ausgabe / 📷 Kassenbon</button>
+        <button type="button" class="btn small ghost" data-pot-fix="${p.id}">✏️ Korrigieren</button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -469,7 +479,25 @@ $('#potList').addEventListener('click', (e) => {
   const spend = e.target.closest('[data-pot-spend]');
   if (edit) openPotDialog(potCache.find((p) => p.id === edit.dataset.potEdit));
   if (spend) openEntryDialog({ kind: 'mehr', potId: spend.dataset.potSpend });
+  const fix = e.target.closest('[data-pot-fix]');
+  if (fix) openPotCorrection(potCache.find((p) => p.id === fix.dataset.potFix));
 });
+// Stand von Hand korrigieren – immer mit Grund, damit beide nachvollziehen können, was passiert ist
+function openPotCorrection(pot) {
+  openDialog({
+    title: `${pot.icon} ${pot.name} korrigieren`,
+    html: `
+      <p class="muted small" style="margin:0">Aktuell ${pot.available < 0 ? 'überschritten' : 'übrig'}: <strong>${fmt(Math.abs(pot.available))}</strong></p>
+      <fieldset><legend>Was soll passieren?</legend>
+        <label class="radio"><input type="radio" name="direction" value="plus" checked> ＋ Geld hinzufügen <span class="muted small">(z. B. vergessene Einzahlung)</span></label>
+        <label class="radio"><input type="radio" name="direction" value="minus"> − Geld abziehen <span class="muted small">(z. B. Bargeld nicht eingetragen)</span></label>
+      </fieldset>
+      <div class="row2">${amountInput(null)}<label>Datum <input type="date" name="date" required value="${todayInMonth(state.month)}"></label></div>
+      <label>Grund <span class="muted">(Pflicht – für euch beide sichtbar)</span>
+        <input name="note" required maxlength="200" placeholder="z. B. Bargeld beim Bäcker nicht eingetragen"></label>`,
+    onSave: (d) => Cloud.addPotEntry({ ...d, kind: 'korrektur', pot_id: pot.id }),
+  });
+}
 $('#potAdd').addEventListener('click', () => openPotDialog());
 $('#potTemplate').addEventListener('click', async () => {
   try {
@@ -482,7 +510,7 @@ function openPotDialog(pot) {
   const icon = pot?.icon || '💰';
   const cats = pot?.categories || [];
   openDialog({
-    title: pot ? `${pot.icon} ${pot.name} bearbeiten` : 'Neue Kasse',
+    title: pot ? `${pot.icon} ${pot.name} bearbeiten` : 'Neues gemeinsames Budget',
     html: `
       <div class="row2">
         <label>Name <input name="name" required maxlength="40" value="${esc(pot?.name)}" placeholder="z. B. Tanken"></label>
@@ -493,7 +521,23 @@ function openPotDialog(pot) {
       <fieldset class="cat-pick"><legend>Kassenbons hierher zuordnen, wenn die Kategorie ist:</legend>
         ${state.meta.categories.map((c) => `<label class="check"><input type="checkbox" name="categories" value="${esc(c)}" ${cats.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('')}
       </fieldset>
-      <div class="hint">${pot ? `Änderungen am Betrag gelten ab ${monthLabel(state.month)} – frühere Monate bleiben, wie sie waren.` : `Die Kasse startet im ${monthLabel(state.month)}.`}</div>`,
+      <div class="hint">${pot ? `Änderungen am Betrag gelten ab ${monthLabel(state.month)} – frühere Monate bleiben, wie sie waren.` : `Startet im ${monthLabel(state.month)}.`}</div>
+      ${pot ? `<label>Grund der Änderung <span class="muted">(optional, wird im Verlauf gespeichert)</span>
+        <input name="reason" maxlength="200" placeholder="z. B. Spritpreise gestiegen"></label>
+        <div class="subhead">Verlauf</div>
+        <ul class="history">${[...(pot.plan || [])].sort((a, b) => b.from.localeCompare(a.from)).map((st) => `<li>
+          <span>ab ${fmtMonth(st.from)}${st.note ? ` · ${esc(st.note)}` : ''}${st.carryover ? '' : ' · ohne Übertrag'}</span><span class="num">${fmt(st.amount)}</span></li>`).join('')}</ul>` : ''}`,
+    onOpen: (body) => {
+      if (pot) return;
+      // neuer Topf: aus dem Namen die passende Kategorie vorschlagen (z. B. „Auto“ -> Auto & Verschleiß)
+      let catsTouched = false;
+      $('.cat-pick', body).addEventListener('change', () => { catsTouched = true; });
+      $('[name=name]', body).addEventListener('input', (e) => {
+        if (catsTouched) return;
+        const cat = window.HaushaltReceipt?.classifyText(e.target.value);
+        $$('[name=categories]', body).forEach((cb) => { cb.checked = cb.value === cat; });
+      });
+    },
     onSave: (d) => {
       d.categories = $$('#dlgBody [name=categories]:checked').map((x) => x.value).join('|');
       d.month = state.month;
@@ -885,21 +929,40 @@ $('#dlgDelete').addEventListener('click', async () => {
 
 const intervalSelect = (v = 1) => `<label>Wie oft?
   <select name="interval">${state.meta.intervals.map((i) => `<option value="${i}" ${i === v ? 'selected' : ''}>${INTERVAL_LABEL[i]}</option>`).join('')}</select></label>`;
+// Passendes gemeinsames Budget finden: zuerst der Name des Topfs im Text („Auto heile gemacht“ -> Topf „Auto“),
+// dann die zugeordneten Kategorien, dann die Kategorie, die zum Topfnamen passt
+const normWords = (t) => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
+function bestPot(pots, r) {
+  const text = normWords([r.text, r.shop].filter(Boolean).join(' '));
+  let best = null, bestScore = 0;
+  for (const p of pots) {
+    let score = 0;
+    const words = normWords(p.name).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+    if (text && words.some((w) => text.includes(w))) score += 3;
+    if (r.category && (p.categories || []).includes(r.category)) score += 2;
+    if (r.category && window.HaushaltReceipt?.classifyText(p.name) === r.category) score += 1;
+    if (score > bestScore) { best = p; bestScore = score; }
+  }
+  return best;
+}
 // Text in den Feldern lesen und die Kategorie vorschlagen, solange man sie nicht selbst gewählt hat
 function autoCategory(body, inputs, isTouched) {
   const sel = $('[name=category]', body);
   let timer;
   const run = () => {
-    if (isTouched()) return;
-    const cat = window.HaushaltReceipt?.classifyText(inputs.map((i) => i.value).join(' '));
-    if (!cat || !state.meta.categories.includes(cat)) return;
-    sel.value = cat;
-    sel.classList.add('auto-filled');
-    let hint = $('[data-auto-cat]', body);
-    if (!hint) { hint = document.createElement('div'); hint.className = 'hint'; hint.dataset.autoCat = ''; sel.closest('label').after(hint); }
-    hint.textContent = `🤖 Erkannt: ${cat} – passt nicht? Einfach selbst auswählen.`;
-    body.lastScan = { ...(body.lastScan || {}), category: cat };
-    body.dispatchEvent(new CustomEvent('scanned', { detail: { category: cat } }));
+    const text = inputs.map((i) => i.value).join(' ').trim();
+    if (!text) return;
+    const cat = window.HaushaltReceipt?.classifyText(text);
+    if (cat && state.meta.categories.includes(cat) && !isTouched()) {
+      sel.value = cat;
+      sel.classList.add('auto-filled');
+      let hint = $('[data-auto-cat]', body);
+      if (!hint) { hint = document.createElement('div'); hint.className = 'hint'; hint.dataset.autoCat = ''; sel.closest('label').after(hint); }
+      hint.textContent = `🤖 Erkannt: ${cat} – passt nicht? Einfach selbst auswählen.`;
+    }
+    const detail = { category: isTouched() ? sel.value : (cat || null), text };
+    body.lastScan = { ...(body.lastScan || {}), ...detail };
+    body.dispatchEvent(new CustomEvent('scanned', { detail }));
   };
   inputs.forEach((i) => i.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 350); }));
 }
@@ -1047,8 +1110,8 @@ function openEntryDialog(item = {}) {
           if (item.potId) paid.value = item.potId;
           syncPaid();
           const pickPot = (r) => {
-            if (paidTouched || !r || !r.category) return;
-            const hit = pots.find((p) => (p.categories || []).includes(r.category));
+            if (paidTouched || !r) return;
+            const hit = bestPot(pots, r);
             if (hit) { paid.value = hit.id; paid.classList.add('auto-filled'); syncPaid(); }
           };
           body.addEventListener('scanned', (ev) => pickPot(ev.detail));

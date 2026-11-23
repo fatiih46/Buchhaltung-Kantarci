@@ -1,9 +1,9 @@
 {
   "version": "2026.11.23-5",
   "notes": [
-    "🧺 Neu: Gemeinsame Budgets unter „Kosten → Fixkosten“ – z. B. ⛽ Tanken, 🛒 Einkaufen, 🎉 Lifestyle für euch beide.",
-    "🤖 Die App erkennt die Kategorie aus deinem Text: „Auto heile machen“ → Auto & Verschleiß – und wählt das passende Budget.",
-    "📷 Kassenbons werden automatisch dem passenden Budget zugeordnet; Rest wandert in den nächsten Monat, Überschreiten wird nicht abgezogen.",
+    "🧺 Neu: Gemeinsame Budgets unter „Kosten → Fixkosten“ – z. B. ⛽ Tanken, 🛒 Einkaufen, 🎉 Lifestyle oder eigene wie 🚗 Auto.",
+    "🤖 Die App erkennt aus deinem Text, wofür das Geld ist: „Auto wieder fit gemacht“ → Budget „Auto“.",
+    "↪️ Plus und Minus wandern in den nächsten Monat – bei Minus mit Hinweis. „✏️ Korrigieren“ mit Grund, für beide nachvollziehbar.",
     "📊 Neu in der Auswertung: „Reichen eure Budgets?“ – zeigt, wo ihr öfter drüber liegt und das Budget anpassen solltet.",
     "👀 Gegenseitig ansehen: Unter ⚙ freigeben, dann kann dein Partner alles ansehen – ändern kann jeder nur das Eigene."
   ]

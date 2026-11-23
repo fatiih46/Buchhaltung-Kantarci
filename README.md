@@ -11,8 +11,10 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
 - **Gemeinsame Budgets** (Cloud-Modus, unter „Kosten → Fixkosten“) – Töpfe für den ganzen Haushalt mit Monatsbudget, z. B.
   ⛽ Tanken 200 €, 🛒 Einkaufen 150 €, 🎉 Lifestyle 50 €. Beide tragen ein und sehen denselben Stand (wer, wann, wie viel,
   Kassenbon). Gescannte Bons werden anhand der Kategorie automatisch der passenden Kasse zugeordnet („Bezahlt aus“).
-  Rest wird in den nächsten Monat übertragen (pro Budget abschaltbar), Überschreiten wird nicht abgezogen, sondern in der
-  Auswertung „📊 Reichen eure Budgets?“ (letzte 6 Monate, auch für eigene Budgets) mit Vorschlag zum Anpassen gezeigt.
+  Plus wie Minus werden in den nächsten Monat übertragen (pro Budget abschaltbar), bei Minus mit Hinweis; „✏️ Korrigieren“
+  ändert den Stand mit Pflicht-Grund, Betragsänderungen speichern einen Grund im Verlauf. Die Auswertung
+  „📊 Reichen eure Budgets?“ (letzte 6 Monate, auch für eigene Budgets) schlägt Anpassungen vor. Ausgaben werden dem
+  Budget zugeordnet, dessen **Name** im Text steht („Auto wieder fit gemacht“ → „Auto“), sonst über die Kategorie.
 - **Kategorie aus Text** – „Auto heile machen“ → Auto & Verschleiß (Wort-Erkennung auf dem Gerät, `public/receipt.js`).
 - **Gegenseitig ansehen** – unter ⚙ gibt jede Person ihre Einträge und Belege für den Haushalt frei; oben umschalten,
   beim Partner ist alles nur zum Ansehen.

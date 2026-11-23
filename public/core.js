@@ -1131,25 +1131,30 @@ function cleanFileName(name) {
 
 // ---------- Gemeinsame Kasse: Stand eines Topfs in einem Monat ----------
 // plan: [{from: 'JJJJ-MM', amount, carryover}] (sortiert oder nicht), entries: [{date, amount}]
-// Ein Rest wandert in den nächsten Monat, wenn carryover gilt. Ein Überschreiten wird NICHT abgezogen –
-// es wird nur angezeigt und in der Auswertung („Reichen eure Budgets?“) mitgezählt.
+// Der Stand (Plus wie Minus) wandert in den nächsten Monat, wenn carryover gilt – ein Minus mit Hinweis in der App.
+// Korrekturen (kind 'korrektur', Betrag ±, mit Grund) verändern den Stand direkt.
 const mIdx = (ym) => { const [y, m] = ym.split('-').map(Number); return y * 12 + (m - 1); };
 const mStr = (i) => `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
 function potStatus(plan, entries, month) {
   const steps = [...(plan || [])].sort((a, b) => a.from.localeCompare(b.from));
-  if (!steps.length || month < steps[0].from) return { active: false, carryIn: 0, amount: 0, spent: 0, available: 0, carryover: true };
-  const spentBy = {};
-  for (const e of entries || []) { const k = String(e.date).slice(0, 7); spentBy[k] = (spentBy[k] || 0) + Number(e.amount); }
+  if (!steps.length || month < steps[0].from) return { active: false, carryIn: 0, amount: 0, spent: 0, corrections: 0, available: 0, carryover: true };
+  const spentBy = {}, corrBy = {};
+  for (const e of entries || []) {
+    const k = String(e.date).slice(0, 7);
+    if (e.kind === 'korrektur') corrBy[k] = (corrBy[k] || 0) + Number(e.amount);
+    else spentBy[k] = (spentBy[k] || 0) + Number(e.amount);
+  }
   let carry = 0;
   for (let i = mIdx(steps[0].from); i <= mIdx(month); i++) {
     const m = mStr(i);
     const step = steps.filter((s) => s.from <= m).pop();
     const spent = round2(spentBy[m] || 0);
-    const available = round2(carry + Number(step.amount) - spent);
-    if (m === month) return { active: true, carryIn: round2(carry), amount: Number(step.amount), spent, available, carryover: !!step.carryover };
-    carry = step.carryover ? Math.max(0, available) : 0;
+    const corrections = round2(corrBy[m] || 0);
+    const available = round2(carry + Number(step.amount) + corrections - spent);
+    if (m === month) return { active: true, carryIn: round2(carry), amount: Number(step.amount), spent, corrections, available, carryover: !!step.carryover };
+    carry = step.carryover ? available : 0;
   }
-  return { active: false, carryIn: 0, amount: 0, spent: 0, available: 0, carryover: true };
+  return { active: false, carryIn: 0, amount: 0, spent: 0, corrections: 0, available: 0, carryover: true };
 }
 // Auswertung eines Budgets über mehrere Monate: wie oft überschritten, Durchschnitt, Vorschlag
 // months: [{month, budget, spent}] – Monate ohne Budget zählen nicht
@@ -1177,9 +1182,12 @@ function budgetReport(name, months, extra = {}) {
 }
 
 // Plan ab einem Monat ändern (frühere Monate bleiben wie sie waren)
-function potPlanUpdate(plan, month, amount, carryover) {
+// note: Grund der Änderung (wird im Verlauf angezeigt)
+function potPlanUpdate(plan, month, amount, carryover, note = '') {
   const rest = (plan || []).filter((s) => s.from < month);
-  return [...rest, { from: month, amount: round2(Number(amount)), carryover: !!carryover }];
+  const step = { from: month, amount: round2(Number(amount)), carryover: !!carryover };
+  if (note && String(note).trim()) step.note = String(note).trim().slice(0, 200);
+  return [...rest, step];
 }
 
 return { createCore, HttpError, CATEGORIES, INTERVALS, UPLOAD_TYPES, MAX_UPLOAD, fileMatchesType, cleanFileName,

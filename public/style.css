@@ -446,3 +446,7 @@ body.readonly #fab, body.readonly .del-btn, body.readonly [data-quick], body.rea
 body.readonly #addEntry, body.readonly #listAdd, body.readonly [data-pay], body.readonly [data-amove], body.readonly .att-buttons,
 body.readonly .att-del, body.readonly .att-mini, body.readonly #editPrices, body.readonly #zakatFromAssets, body.readonly [data-zpay],
 body.readonly #kasseBox, body.readonly .quick { display: none !important; }
+.pot-warn { margin: .2rem 0 .4rem; font-size: .85rem; color: var(--danger); background: var(--danger-soft); border-radius: 8px; padding: .4rem .6rem; }
+.pot-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.pot-entries li.korrektur .title { font-weight: 500; }
+body.readonly .pot-actions { display: none !important; }

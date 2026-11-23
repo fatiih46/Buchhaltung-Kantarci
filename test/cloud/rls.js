@@ -126,7 +126,7 @@ const assert = require('assert/strict');
   await as(B, `insert into storage.objects (bucket_id, name) values ('belege', $1)`, [`${B}/bon.jpg`]);
   await as(B, `insert into storage.objects (bucket_id, name) values ('belege', $1)`, [`${B}/privat.jpg`]);
   await as(B, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, shop, file_path, file_type) values ($1, $2, $3, '2026-11-20', 61.5, 'Aral', $4, 'image/jpeg')`, [pot, hhA, B, `${B}/bon.jpg`]);
-  const seen = await as(A, `select user_id, amount, shop from public.pot_entries`);
+  const seen = await as(A, `select user_id, amount, shop from public.pot_entries where kind = 'ausgabe'`);
   assert.equal(seen.length, 1);
   assert.equal(Number(seen[0].amount), 61.5);
   assert.equal(seen[0].user_id, B);
@@ -140,6 +140,11 @@ const assert = require('assert/strict');
   assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/privat.jpg`])).length, 0, 'private Belege: nur die Person selbst');
   assert.equal((await as(E, `delete from storage.objects where name = $1 returning 1`, [`${B}/bon.jpg`])).length, 0, 'Fremde nicht');
   assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/bon.jpg`])).length, 1, 'Kassenbon: Haushalt darf mitlöschen');
+  // Korrekturen: +/− mit Grund; normale Ausgaben nur positiv
+  await as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, kind, note) values ($1, $2, $3, '2026-11-21', -20, 'korrektur', 'Bargeld vergessen')`, [pot, hhA, A]);
+  await assert.rejects(as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, kind, note) values ($1, $2, $3, '2026-11-21', 20, 'korrektur', '  ')`, [pot, hhA, A]), /korrektur_check/, 'Grund Pflicht');
+  await assert.rejects(as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount) values ($1, $2, $3, '2026-11-21', -5)`, [pot, hhA, A]), /amount_check/, 'Ausgabe nicht negativ');
+  await assert.rejects(as(A, `insert into public.pot_entries (pot_id, household_id, user_id, date, amount, kind, note) values ($1, $2, $3, '2026-11-21', 5, 'quatsch', 'x')`, [pot, hhA, A]), /kind_check/);
   // Gegenseitig ansehen: erst nach Freigabe, nur lesen, nur im eigenen Haushalt
   await as(B, `insert into user_data (user_id, data) values ($1, 'BBB')`, [B]);
   assert.equal((await as(A, `select * from user_data where user_id = $1`, [B])).length, 0, 'ohne Freigabe nichts');

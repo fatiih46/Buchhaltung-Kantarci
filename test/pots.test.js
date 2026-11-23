@@ -7,30 +7,42 @@ const plan = [{ from: '2026-11', amount: 200, carryover: true }];
 const entries = [
   { date: '2026-11-03', amount: '61.50' }, { date: '2026-11-20', amount: 80 }, // Nov: 141,50 -> 58,50 übrig
   { date: '2026-12-10', amount: 300 },                                         // Dez: 58,50 + 200 − 300 = −41,50 (überschritten)
-  { date: '2027-01-05', amount: 100 },                                         // Jan: kein Minus übernommen: 200 − 100 = 100
+  { date: '2027-01-05', amount: 100 },                                         // Jan: −41,50 + 200 − 100 = 58,50
 ];
 
-test('Topf: Monatsbudget, Ausgaben, Übertrag – Überschreiten geht nicht in den nächsten Monat', () => {
-  assert.deepEqual(potStatus(plan, entries, '2026-11'), { active: true, carryIn: 0, amount: 200, spent: 141.5, available: 58.5, carryover: true });
-  assert.deepEqual(potStatus(plan, entries, '2026-12'), { active: true, carryIn: 58.5, amount: 200, spent: 300, available: -41.5, carryover: true });
-  assert.equal(potStatus(plan, entries, '2027-01').carryIn, 0, 'kein Minus übernommen');
-  assert.equal(potStatus(plan, entries, '2027-01').available, 100);
-  assert.equal(potStatus(plan, entries, '2027-02').available, 300, 'nichts ausgegeben -> Rest wächst weiter');
+test('Topf: Plus und Minus wandern in den nächsten Monat', () => {
+  assert.deepEqual(potStatus(plan, entries, '2026-11'), { active: true, carryIn: 0, amount: 200, spent: 141.5, corrections: 0, available: 58.5, carryover: true });
+  assert.deepEqual(potStatus(plan, entries, '2026-12'), { active: true, carryIn: 58.5, amount: 200, spent: 300, corrections: 0, available: -41.5, carryover: true });
+  assert.equal(potStatus(plan, entries, '2027-01').carryIn, -41.5, 'Minus wird übertragen');
+  assert.equal(potStatus(plan, entries, '2027-01').available, 58.5);
+  assert.equal(potStatus(plan, entries, '2027-02').available, 258.5, 'nichts ausgegeben -> wächst weiter');
   assert.equal(potStatus(plan, entries, '2026-10').active, false, 'vor dem Start');
 });
 
-test('Topf ohne Übertrag und Änderung ab einem Monat', () => {
+test('Korrekturen mit Grund verändern den Stand', () => {
+  const withCorr = [...entries, { date: '2026-12-31', amount: 41.5, kind: 'korrektur', note: 'Bargeld nachgetragen' }];
+  const dez = potStatus(plan, withCorr, '2026-12');
+  assert.equal(dez.corrections, 41.5);
+  assert.equal(dez.available, 0);
+  assert.equal(potStatus(plan, withCorr, '2027-01').carryIn, 0);
+  const minus = [...entries, { date: '2026-11-30', amount: -8.5, kind: 'korrektur', note: 'falsch gezählt' }];
+  assert.equal(potStatus(plan, minus, '2026-11').available, 50);
+  assert.equal(potStatus(plan, minus, '2026-11').spent, 141.5, 'Korrektur zählt nicht als Ausgabe');
+});
+
+test('Topf ohne Übertrag und Änderung ab einem Monat (mit Grund)', () => {
   const noCarry = [{ from: '2026-11', amount: 200, carryover: false }];
   assert.equal(potStatus(noCarry, entries, '2026-12').carryIn, 0);
   assert.equal(potStatus(noCarry, entries, '2026-12').available, -100);
-  // ab Januar 250 € und ohne Übertrag – November/Dezember bleiben wie vorher
-  const changed = potPlanUpdate(plan, '2027-01', '250', false);
+  const changed = potPlanUpdate(plan, '2027-01', '250', false, ' Tanken ist teurer geworden ');
   assert.equal(changed.length, 2);
+  assert.equal(changed[1].note, 'Tanken ist teurer geworden');
   assert.equal(potStatus(changed, entries, '2026-12').available, -41.5);
-  assert.deepEqual(potStatus(changed, entries, '2027-01'), { active: true, carryIn: 0, amount: 250, spent: 100, available: 150, carryover: false });
+  assert.deepEqual(potStatus(changed, entries, '2027-01'), { active: true, carryIn: -41.5, amount: 250, spent: 100, corrections: 0, available: 108.5, carryover: false });
   assert.equal(potStatus(changed, entries, '2027-02').carryIn, 0, 'ab Januar ohne Übertrag');
-  // nochmal im selben Monat ändern ersetzt die Stufe
-  assert.equal(potPlanUpdate(changed, '2027-01', 300, true).length, 2);
+  assert.equal(potPlanUpdate(changed, '2027-01', 300, true).length, 2, 'gleicher Monat ersetzt');
+  assert.equal(potPlanUpdate(plan, '2027-01', 300, true).length, 2);
+  assert.equal('note' in potPlanUpdate(plan, '2027-01', 300, true)[1], false, 'ohne Grund kein Feld');
 });
 
 const { budgetReport } = require('../public/core.js');

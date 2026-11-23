@@ -427,7 +427,7 @@
         id: p.id, name: p.name, icon: p.icon, categories: p.categories || [], plan: p.plan, history,
         ...C.potStatus(p.plan, mine, month),
         entries: monthEntries.filter((e) => e.pot_id === p.id).sort((a, b) => String(b.date).localeCompare(String(a.date)))
-          .map((e) => ({ id: e.id, date: String(e.date).slice(0, 10), amount: toNum(e.amount), shop: e.shop, note: e.note,
+          .map((e) => ({ id: e.id, kind: e.kind || 'ausgabe', date: String(e.date).slice(0, 10), amount: toNum(e.amount), shop: e.shop, note: e.note,
             who: e.user_id ? (names[e.user_id] || 'gelöschtes Konto') : 'gelöschtes Konto', mine: e.user_id === auth.uid,
             fileType: e.file_type, url: e.file_path ? urls[e.file_path] || '' : '' })),
       };
@@ -442,7 +442,8 @@
     const carryover = body.carryover === true || body.carryover === 'on' || body.carryover === '1';
     const cats = (Array.isArray(body.categories) ? body.categories : String(body.categories || '').split('|'))
       .filter((k) => C.CATEGORIES.includes(k));
-    return { name, icon, amount, carryover, categories: cats, month: C.monthStr(body.month) };
+    const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 200) : '';
+    return { name, icon, amount, carryover, categories: cats, month: C.monthStr(body.month), reason };
   }
   async function createPot(body) {
     const f = potFields(body);
@@ -457,7 +458,7 @@
     if (cur.error) throw offline(cur.error);
     if (!cur.data) throw new HttpError(404, 'Nicht gefunden.');
     const { error } = await sb.from('pots').update({ name: f.name, icon: f.icon, categories: f.categories,
-      plan: C.potPlanUpdate(cur.data.plan, f.month, f.amount, f.carryover) }).eq('id', id);
+      plan: C.potPlanUpdate(cur.data.plan, f.month, f.amount, f.carryover, f.reason) }).eq('id', id);
     if (error) throw offline(error);
     return { ok: true };
   }
@@ -477,8 +478,13 @@
     await ensureData();
     if (view) throw readOnly();
     const date = C.dateStr(body.date);
-    const amount = C.num(body.amount, 'Betrag', { min: 0.01 });
-    if (!body.pot_id) throw new HttpError(400, 'Bitte eine Kasse auswählen.');
+    const kind = body.kind === 'korrektur' ? 'korrektur' : 'ausgabe';
+    let amount = C.num(body.amount, 'Betrag', { min: 0.01 });
+    if (!body.pot_id) throw new HttpError(400, 'Bitte ein Budget auswählen.');
+    if (kind === 'korrektur') {
+      if (!String(body.note || '').trim()) throw new HttpError(400, 'Bitte einen Grund für die Korrektur angeben.');
+      if (body.direction === 'minus') amount = -amount;
+    }
     let filePath = null, fileType = null;
     if (file) {
       const ftype = String(file.type || '').toLowerCase();
@@ -491,7 +497,7 @@
       fileType = ftype;
     }
     const { error } = await sb.from('pot_entries').insert({ pot_id: body.pot_id, household_id: member.household_id, user_id: auth.uid,
-      date, amount, shop: String(body.shop || '').trim().slice(0, 60), note: String(body.note || '').trim().slice(0, 200),
+      date, amount, kind, shop: String(body.shop || '').trim().slice(0, 60), note: String(body.note || '').trim().slice(0, 200),
       file_path: filePath, file_type: fileType });
     if (error) {
       if (filePath) sb.storage.from(BUCKET).remove([filePath]).catch(() => {});
