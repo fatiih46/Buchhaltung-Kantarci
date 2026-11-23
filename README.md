@@ -14,7 +14,9 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
   Plus wie Minus werden in den nächsten Monat übertragen (pro Budget abschaltbar), bei Minus mit Hinweis; „✏️ Korrigieren“
   ändert den Stand mit Pflicht-Grund, Betragsänderungen speichern einen Grund im Verlauf. Die Auswertung
   „📊 Reichen eure Budgets?“ (letzte 6 Monate, auch für eigene Budgets) schlägt Anpassungen vor. Ausgaben werden dem
-  Budget zugeordnet, dessen **Name** im Text steht („Auto wieder fit gemacht“ → „Auto“), sonst über die Kategorie.
+  Budget zugeordnet, dessen **Stichwörter** oder **Name** im Text stehen („Auto wieder fit gemacht“ → „Auto“), sonst über
+  die Kategorie. Die App **lernt** aus bestätigten Zuordnungen („Mayonnaise“ einmal → „Ladenausgabe“, danach automatisch);
+  jeder Topf zeigt, wer ihn angelegt hat.
 - **Kategorie aus Text** – „Auto heile machen“ → Auto & Verschleiß (Wort-Erkennung auf dem Gerät, `public/receipt.js`).
 - **Gegenseitig ansehen** – unter ⚙ gibt jede Person ihre Einträge und Belege für den Haushalt frei; oben umschalten,
   beim Partner ist alles nur zum Ansehen.

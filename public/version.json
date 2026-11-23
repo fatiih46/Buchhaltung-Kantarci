@@ -1,10 +1,9 @@
 {
-  "version": "2026.11.23-5",
+  "version": "2026.11.24",
   "notes": [
-    "🧺 Neu: Gemeinsame Budgets unter „Kosten → Fixkosten“ – z. B. ⛽ Tanken, 🛒 Einkaufen, 🎉 Lifestyle oder eigene wie 🚗 Auto.",
-    "🤖 Die App erkennt aus deinem Text, wofür das Geld ist: „Auto wieder fit gemacht“ → Budget „Auto“.",
-    "↪️ Plus und Minus wandern in den nächsten Monat – bei Minus mit Hinweis. „✏️ Korrigieren“ mit Grund, für beide nachvollziehbar.",
-    "📊 Neu in der Auswertung: „Reichen eure Budgets?“ – zeigt, wo ihr öfter drüber liegt und das Budget anpassen solltet.",
-    "👀 Gegenseitig ansehen: Unter ⚙ freigeben, dann kann dein Partner alles ansehen – ändern kann jeder nur das Eigene."
+    "🧠 Die App lernt mit: Ordnest du eine Ausgabe einmal einem Topf zu (z. B. „Mayonnaise“ → Ladenausgabe), landet sie beim nächsten Mal von selbst dort.",
+    "🏷️ Jeder Topf hat Stichwörter (z. B. „Anlage“: Aktien, ETF, Depot) – sichtbar und änderbar beim Antippen des Topfs.",
+    "🥫 Viel mehr Alltagswörter erkannt: Lebensmittel wie Brot, Käse, Ketchup, Sucuk – und Anlagen wie Aktien, ETF, Bitcoin.",
+    "👤 Bei jedem Topf steht, wer ihn angelegt hat."
   ]
 }
