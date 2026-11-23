@@ -380,3 +380,8 @@ alter table public.pot_entries add constraint pot_entries_amount_check
 alter table public.pot_entries add constraint pot_entries_kind_check check (kind in ('ausgabe', 'korrektur'));
 alter table public.pot_entries add constraint pot_entries_korrektur_check
   check (kind <> 'korrektur' or char_length(trim(note)) > 0);
+
+-- ---------- Wer hat ein gemeinsames Budget angelegt, und welche Wörter gehören dazu ----------
+-- keywords: Stichwörter (von Hand oder von der App gelernt), damit Ausgaben automatisch im richtigen Topf landen
+alter table public.pots add column if not exists created_by uuid references auth.users (id) on delete set null default auth.uid();
+alter table public.pots add column if not exists keywords jsonb not null default '[]'::jsonb;

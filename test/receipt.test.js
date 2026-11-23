@@ -100,3 +100,13 @@ test('Kategorie aus freiem Text erkennen', () => {
   assert.equal(classifyText('xyz qwertz'), null, 'unbekannt -> nichts raten');
   assert.equal(classifyText('Moped'), null, '„o2“ steckt nicht in Wörtern');
 });
+
+const { significantWords } = require('../public/receipt.js');
+test('Einzelne Waren und Anlagen erkennen; Wörter zum Lernen', () => {
+  for (const [text, cat] of [['Mayonnaise', 'Einkaufen & Lebensmittel'], ['Ketchup und Brot', 'Einkaufen & Lebensmittel'],
+    ['Ladenausgabe', 'Einkaufen & Lebensmittel'], ['Käse, Eier, Butter', 'Einkaufen & Lebensmittel'], ['Sucuk', 'Einkaufen & Lebensmittel'],
+    ['Aktien gekauft', 'Sparen & Rücklagen'], ['Anlage', 'Sparen & Rücklagen'], ['ETF Sparplan', 'Sparen & Rücklagen'], ['Bitcoin', 'Sparen & Rücklagen'],
+    ['Auto Öl nachgefüllt', 'Auto & Verschleiß']]) assert.equal(classifyText(text), cat, text);
+  assert.deepEqual(significantWords('Mayonnaise und Ketchup bei Lidl gekauft, 2 Stück'), ['mayonnaise', 'ketchup', 'lidl']);
+  assert.deepEqual(significantWords('Öl für die Brötchen'), ['broetchen'], 'Umlaute vereinheitlicht, kurze Wörter weg');
+});

@@ -120,8 +120,8 @@
   }
 
   // ---------- Kategorie aus freiem Text erkennen („Auto heile machen“ -> Auto & Verschleiß) ----------
-  // Einfache Wort-Erkennung auf dem Gerät: Stichwörter (auch als Teil zusammengesetzter Wörter) zählen,
-  // die Kategorie mit den meisten Treffern gewinnt. Kurze Stichwörter (≤ 3 Zeichen) nur als ganzes Wort.
+  // Einfache Wort-Erkennung auf dem Gerät: Stichwörter (auch als Teil zusammengesetzter Wörter) zählen nach ihrer Länge,
+  // die Kategorie mit der höchsten Summe gewinnt. Kurze Stichwörter (≤ 3 Zeichen) nur als ganzes Wort.
   const KEYWORDS = {
     'Auto & Verschleiß': ['auto', 'kfz', 'pkw', 'wagen', 'werkstatt', 'reifen', 'felge', 'tüv', 'tuev', 'hu au', 'inspektion',
       'ölwechsel', 'oelwechsel', 'öl', 'tank', 'benzin', 'diesel', 'sprit', 'super e10', 'e10', 'waschanlage', 'autowäsche',
@@ -130,7 +130,16 @@
       'motor', 'karosserie', 'stoßdämpfer', 'zahnriemen', 'klimaservice', 'scheinwerfer', 'aral', 'shell', 'esso'],
     'Einkaufen & Lebensmittel': ['einkauf', 'lebensmittel', 'supermarkt', 'wocheneinkauf', 'lidl', 'aldi', 'rewe', 'edeka', 'kaufland',
       'netto', 'penny', 'norma', 'bäcker', 'baecker', 'brot', 'brötchen', 'metzger', 'fleisch', 'obst', 'gemüse', 'milch',
-      'getränke', 'wasserkasten', 'markt', 'türkischer laden', 'halal'],
+      'getränke', 'wasserkasten', 'markt', 'türkischer laden', 'halal', 'laden', 'ladenausgabe', 'lebensmittel',
+      // häufige Waren, damit auch einzelne Posten erkannt werden („Mayonnaise“, „Ketchup“)
+      'mayonnaise', 'mayo', 'ketchup', 'senf', 'butter', 'margarine', 'käse', 'kaese', 'joghurt', 'quark', 'sahne', 'eier',
+      'mehl', 'zucker', 'salz', 'pfeffer', 'gewürz', 'nudeln', 'spaghetti', 'reis', 'bulgur', 'linsen', 'bohnen', 'kichererbsen',
+      'tomate', 'kartoffel', 'zwiebel', 'knoblauch', 'paprika', 'gurke', 'salat', 'möhre', 'karotte', 'apfel', 'äpfel', 'banane',
+      'orange', 'zitrone', 'trauben', 'erdbeere', 'wurst', 'salami', 'sucuk', 'hähnchen', 'haehnchen', 'hackfleisch', 'rind',
+      'lamm', 'fisch', 'thunfisch', 'konserve', 'tiefkühl', 'pizza tiefkühl', 'müsli', 'cornflakes', 'haferflocken', 'honig',
+      'marmelade', 'nutella', 'schokolade', 'kekse', 'chips', 'süßigkeiten', 'snacks', 'kaffee pad', 'tee', 'saft', 'cola',
+      'limonade', 'mineralwasser', 'sprudel', 'ayran', 'oliven', 'olivenöl', 'sonnenblumenöl', 'essig', 'brühe', 'soße', 'sosse',
+      'toast', 'baguette', 'simit', 'börek', 'pide', 'fladenbrot', 'lavash', 'babynahrung'],
     'Drogerie & Haushalt': ['drogerie', 'dm', 'rossmann', 'müller', 'putzmittel', 'waschmittel', 'spülmittel', 'klopapier',
       'toilettenpapier', 'shampoo', 'zahnpasta', 'haushaltswaren', 'staubsauger', 'action', 'tedi'],
     'Essen gehen & Lieferdienste': ['restaurant', 'essen gehen', 'essen bestellt', 'lieferando', 'wolt', 'uber eats', 'döner', 'doener',
@@ -153,7 +162,9 @@
     'Versicherungen': ['versicherung', 'haftpflicht', 'hausrat', 'kasko', 'police', 'allianz', 'huk', 'ergo', 'debeka'],
     'Urlaub': ['urlaub', 'hotel', 'flug', 'ferienwohnung', 'airbnb', 'reise', 'koffer', 'türkei urlaub', 'booking', 'camping'],
     'Spenden & Zekât': ['spende', 'zekat', 'zekât', 'zakat', 'sadaka', 'sadaqa', 'fitre', 'moschee', 'kurban', 'qurban', 'kollekte'],
-    'Sparen & Rücklagen': ['sparen', 'rücklage', 'sparkonto', 'tagesgeld', 'etf', 'sparplan', 'notgroschen'],
+    'Sparen & Rücklagen': ['sparen', 'rücklage', 'sparkonto', 'tagesgeld', 'etf', 'sparplan', 'notgroschen', 'anlage', 'geldanlage',
+      'aktie', 'depot', 'invest', 'fonds', 'krypto', 'bitcoin', 'ethereum', 'goldbarren', 'goldmünze', 'silbermünze', 'trade republic',
+      'scalable', 'comdirect', 'dividende', 'börse', 'boerse', 'bausparen', 'vermögen'],
     'Schulden & Raten': ['rate', 'raten', 'kredit', 'darlehen', 'ratenzahlung', 'klarna', 'abzahlung'],
   };
   const norm = (t) => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
@@ -161,18 +172,28 @@
     const n = norm(w);
     const esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     // kurze Wörter nur ganz, längere auch als Teil („Autoreparatur“, „Winterreifen“)
-    return n.length <= 3 ? new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`) : new RegExp(esc);
+    return { re: n.length <= 3 ? new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`) : new RegExp(esc), weight: n.length };
   })]);
   function classifyText(text) {
     const t = norm(text);
     if (!t.trim()) return null;
     let best = null, bestScore = 0;
     for (const [cat, res] of COMPILED) {
-      const score = res.reduce((s, re) => s + (re.test(t) ? 1 : 0), 0);
+      // längere, genauere Wörter zählen mehr („Apotheke“ schlägt „Saft“ in „Hustensaft“)
+      const score = res.reduce((sum, k) => sum + (k.re.test(t) ? k.weight : 0), 0);
       if (score > bestScore) { best = cat; bestScore = score; }
     }
     return best;
   }
 
-  return { parseReceipt, classifyText };
+  // Wörter, die etwas über den Zweck sagen (zum Lernen der Zuordnung): ohne Füllwörter, Zahlen, sehr kurze Wörter
+  const STOP = new Set(['der', 'die', 'das', 'und', 'oder', 'mit', 'ohne', 'fuer', 'von', 'vom', 'bei', 'beim', 'im', 'in', 'am',
+    'an', 'auf', 'aus', 'zum', 'zur', 'ein', 'eine', 'einen', 'einem', 'einer', 'eur', 'euro', 'gekauft', 'bezahlt', 'neu', 'neue',
+    'neuer', 'neues', 'heute', 'gestern', 'wieder', 'noch', 'mal', 'fuers', 'ueber', 'etwas', 'sachen', 'paar', 'kauf', 'gemacht',
+    'machen', 'fuer', 'den', 'dem', 'des', 'ist', 'war', 'wurde', 'haben', 'hat', 'auch', 'nur', 'sehr', 'viel', 'wenig', 'stueck']);
+  function significantWords(text) {
+    return [...new Set(norm(text).split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !/^\d+$/.test(w) && !STOP.has(w)))];
+  }
+
+  return { parseReceipt, classifyText, significantWords, normalize: norm };
 });

@@ -378,6 +378,19 @@
     view = { uid, name, raw: r, db: vdb, core: vcore };
   };
   Cloud.viewing = () => (view ? view.name : null);
+  // Zuordnung lernen: Wörter einer bestätigten Ausgabe merkt sich der Topf (für alle im Haushalt)
+  Cloud.learnPotWords = async (potId, text) => {
+    const words = window.HaushaltReceipt.significantWords(text);
+    if (!potId || !words.length || view) return;
+    const all = await sb.from('pots').select('id, keywords');
+    if (all.error) return;
+    for (const p of all.data) {
+      const known = p.keywords || [];
+      // Wort gehört jetzt hierher: beim Ziel ergänzen, bei anderen Töpfen entfernen (sonst würden sie konkurrieren)
+      const next = p.id === potId ? [...new Set([...known, ...words])].slice(-200) : known.filter((k) => !words.includes(k));
+      if (next.length !== known.length) await sb.from('pots').update({ keywords: next }).eq('id', p.id);
+    }
+  };
   const readOnly = () => new HttpError(403, `Du siehst gerade die Einträge von ${view.name} – ändern kann nur ${view.name} selbst. Oben auf „Meine Daten“ wechseln.`);
   async function setShare(input) {
     await requireAuth();
@@ -425,6 +438,7 @@
       }), { potId: p.id, shared: true });
       return {
         id: p.id, name: p.name, icon: p.icon, categories: p.categories || [], plan: p.plan, history,
+        keywords: p.keywords || [], createdBy: p.created_by ? (names[p.created_by] || 'gelöschtes Konto') : null, createdAt: p.created_at,
         ...C.potStatus(p.plan, mine, month),
         entries: monthEntries.filter((e) => e.pot_id === p.id).sort((a, b) => String(b.date).localeCompare(String(a.date)))
           .map((e) => ({ id: e.id, kind: e.kind || 'ausgabe', date: String(e.date).slice(0, 10), amount: toNum(e.amount), shop: e.shop, note: e.note,
@@ -443,12 +457,17 @@
     const cats = (Array.isArray(body.categories) ? body.categories : String(body.categories || '').split('|'))
       .filter((k) => C.CATEGORIES.includes(k));
     const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 200) : '';
-    return { name, icon, amount, carryover, categories: cats, month: C.monthStr(body.month), reason };
+    // Stichwörter: Komma, Zeilenumbruch oder „|“ getrennt, vereinheitlicht und ohne Doppelte
+    const norm = window.HaushaltReceipt.normalize;
+    const keywords = [...new Set((Array.isArray(body.keywords) ? body.keywords : String(body.keywords || '').split(/[,|\n]/))
+      .map((k) => norm(k).trim()).filter((k) => k.length >= 2))].slice(0, 200);
+    return { name, icon, amount, carryover, categories: cats, month: C.monthStr(body.month), reason, keywords };
   }
   async function createPot(body) {
     const f = potFields(body);
     const { data, error } = await sb.from('pots').insert({ household_id: member.household_id, name: f.name, icon: f.icon,
-      categories: f.categories, plan: [{ from: f.month, amount: f.amount, carryover: f.carryover }] }).select('id');
+      categories: f.categories, keywords: f.keywords, created_by: auth.uid,
+      plan: [{ from: f.month, amount: f.amount, carryover: f.carryover }] }).select('id');
     if (error) throw offline(error);
     return { ok: true, id: data[0].id };
   }
@@ -457,7 +476,7 @@
     const cur = await sb.from('pots').select('plan').eq('id', id).maybeSingle();
     if (cur.error) throw offline(cur.error);
     if (!cur.data) throw new HttpError(404, 'Nicht gefunden.');
-    const { error } = await sb.from('pots').update({ name: f.name, icon: f.icon, categories: f.categories,
+    const { error } = await sb.from('pots').update({ name: f.name, icon: f.icon, categories: f.categories, keywords: f.keywords,
       plan: C.potPlanUpdate(cur.data.plan, f.month, f.amount, f.carryover, f.reason) }).eq('id', id);
     if (error) throw offline(error);
     return { ok: true };

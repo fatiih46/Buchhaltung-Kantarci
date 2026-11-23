@@ -449,7 +449,7 @@ async function renderKasse() {
     return `<div class="card pot">
       <div class="pot-head" data-pot-edit="${p.id}" title="Antippen zum Ändern">
         <span class="pot-icon">${esc(p.icon)}</span>
-        <div class="grow"><div class="title">${esc(p.name)} <span class="muted small">✎</span></div>
+        <div class="grow"><div class="title">${esc(p.name)} <span class="muted small">✎${p.createdBy ? ` · von ${esc(p.createdBy)}` : ''}</span></div>
           <div class="meta">${fmt(p.amount)} / Monat${p.carryIn ? ` · Übertrag ${p.carryIn > 0 ? '+' : ''}${fmt(p.carryIn)}` : ''}${p.corrections ? ` · Korrektur ${p.corrections > 0 ? '+' : ''}${fmt(p.corrections)}` : ''} · ausgegeben ${fmt(p.spent)}${p.carryover ? '' : ' · ohne Übertrag'}</div></div>
         <div class="right"><div class="pot-avail num ${p.available < 0 ? 'neg' : 'pos'}">${p.available < 0 ? fmt(-p.available) : fmt(p.available)}</div><div class="meta">${p.available < 0 ? 'überschritten' : 'noch übrig'}</div></div>
       </div>
@@ -506,6 +506,19 @@ $('#potTemplate').addEventListener('click', async () => {
     render();
   } catch (err) { toast(err.message); }
 });
+// Beispiel-Stichwörter passend zum Namen (nur als Platzhalter)
+function potKeywordHint(name) {
+  const cat = window.HaushaltReceipt?.classifyText(name || '');
+  const EX = {
+    'Einkaufen & Lebensmittel': 'z. B. Brot, Milch, Mayonnaise, Ketchup, Obst',
+    'Sparen & Rücklagen': 'z. B. Aktien, ETF, Depot, Gold, Krypto',
+    'Auto & Verschleiß': 'z. B. Werkstatt, Reifen, TÜV, Ölwechsel',
+    'Freizeit': 'z. B. Kino, Bowling, Schwimmbad',
+    'Essen gehen & Lieferdienste': 'z. B. Restaurant, Döner, Pizza',
+    'Kinder': 'z. B. Windeln, Kita, Spielzeug',
+  };
+  return EX[cat] || 'z. B. Wörter, die du bei Ausgaben für diesen Topf schreibst';
+}
 function openPotDialog(pot) {
   const icon = pot?.icon || '💰';
   const cats = pot?.categories || [];
@@ -518,10 +531,13 @@ function openPotDialog(pot) {
       </div>
       ${amountInput(pot?.amount, 'Betrag pro Monat (€)')}
       <label class="check"><input type="checkbox" name="carryover" ${!pot || pot.carryover ? 'checked' : ''}> Was übrig bleibt, in den nächsten Monat übertragen</label>
+      <label>Stichwörter <span class="muted">(was gehört hierher? mit Komma getrennt – die App lernt automatisch dazu)</span>
+        <textarea name="keywords" rows="2" maxlength="3000" placeholder="${esc(potKeywordHint(pot?.name))}">${esc((pot?.keywords || []).join(', '))}</textarea></label>
       <fieldset class="cat-pick"><legend>Kassenbons hierher zuordnen, wenn die Kategorie ist:</legend>
         ${state.meta.categories.map((c) => `<label class="check"><input type="checkbox" name="categories" value="${esc(c)}" ${cats.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('')}
       </fieldset>
       <div class="hint">${pot ? `Änderungen am Betrag gelten ab ${monthLabel(state.month)} – frühere Monate bleiben, wie sie waren.` : `Startet im ${monthLabel(state.month)}.`}</div>
+      ${pot && pot.createdBy ? `<p class="muted small" style="margin:0">Angelegt von <strong>${esc(pot.createdBy)}</strong>${pot.createdAt ? ` am ${new Date(pot.createdAt).toLocaleDateString('de-DE')}` : ''}</p>` : ''}
       ${pot ? `<label>Grund der Änderung <span class="muted">(optional, wird im Verlauf gespeichert)</span>
         <input name="reason" maxlength="200" placeholder="z. B. Spritpreise gestiegen"></label>
         <div class="subhead">Verlauf</div>
@@ -533,6 +549,7 @@ function openPotDialog(pot) {
       let catsTouched = false;
       $('.cat-pick', body).addEventListener('change', () => { catsTouched = true; });
       $('[name=name]', body).addEventListener('input', (e) => {
+        $('[name=keywords]', body).placeholder = potKeywordHint(e.target.value);
         if (catsTouched) return;
         const cat = window.HaushaltReceipt?.classifyText(e.target.value);
         $$('[name=categories]', body).forEach((cb) => { cb.checked = cb.value === cat; });
@@ -939,6 +956,9 @@ function bestPot(pots, r) {
     let score = 0;
     const words = normWords(p.name).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
     if (text && words.some((w) => text.includes(w))) score += 3;
+    // gelernte / eingetragene Stichwörter des Topfs („mayonnaise“ -> Ladenausgabe) zählen am meisten
+    const tokens = text.split(/[^a-z0-9]+/);
+    if (text && (p.keywords || []).some((k) => (k.length >= 5 ? text.includes(k) : tokens.includes(k)))) score += 4;
     if (r.category && (p.categories || []).includes(r.category)) score += 2;
     if (r.category && window.HaushaltReceipt?.classifyText(p.name) === r.category) score += 1;
     if (score > bestScore) { best = p; bestScore = score; }
@@ -1131,6 +1151,7 @@ function openEntryDialog(item = {}) {
         const file = pendingFiles[0] ? await shrinkImage(pendingFiles[0]) : null;
         await Cloud.addPotEntry({ pot_id: d.paid_from, date: d.date, amount: d.amount, shop: d.shop, note: d.note }, file);
         pendingFiles = [];
+        Cloud.learnPotWords(d.paid_from, [d.note, d.shop].filter(Boolean).join(' ')).catch(() => {}); // nächstes Mal landet das von selbst hier
         return;
       }
       const { id } = await api('POST', '/api/entries', d);

@@ -384,6 +384,64 @@ ${dd}      17:12
   await api(fatih, 'DELETE', `/api/pots/${autoPot.id}`);
   await fatih.evaluate((m) => { state.month = m; render(); }, curYm);
 
+  // ---------- 6e3. Eigene Töpfe der Partnerin; App lernt, was wohin gehört ----------
+  const newPot = async (page, name, amount) => {
+    await page.click('#potAdd');
+    await page.waitForSelector('#dlg[open]');
+    await page.fill('#dlgBody [name=name]', name);
+    await page.fill('#dlgBody [name=amount]', amount);
+    await page.click('#dlgForm button[type=submit]');
+    await page.waitForSelector('#dlg', { state: 'hidden' });
+  };
+  await frau.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
+  await frau.waitForSelector('#potList .pot');
+  await newPot(frau, 'Ladenausgabe', '300');
+  await newPot(frau, 'Anlage', '100');
+  const potsNow = (await api(frau, 'GET', `/api/pots?month=${curYm}`)).pots;
+  const laden = potsNow.find((p) => p.name === 'Ladenausgabe');
+  const anlage = potsNow.find((p) => p.name === 'Anlage');
+  assert.deepEqual(laden.categories, ['Einkaufen & Lebensmittel'], 'aus dem Namen erkannt');
+  assert.deepEqual(anlage.categories, ['Sparen & Rücklagen']);
+  assert.equal(laden.createdBy, 'Partnerin', 'wer hat angelegt');
+  await fatih.evaluate(() => render());
+  await fatih.waitForFunction(() => document.querySelector('#potList').textContent.includes('von Partnerin'));
+  const expensePot = async (text) => {
+    await fatih.click('#fab');
+    await fatih.click('[data-qa=ausgabe]');
+    await fatih.waitForSelector('#dlg[open] [name=paid_from] option:nth-child(2)', { state: 'attached' });
+    await fatih.fill('#dlgBody [name=note]', text);
+    await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=paid_from]').classList.contains('auto-filled'));
+    return fatih.$eval('#dlgBody [name=paid_from]', (s) => s.selectedOptions[0].textContent);
+  };
+  assert.match(await expensePot('Aktien gekauft'), /Anlage/, 'Aktien -> Anlage');
+  await fatih.click('#dlgCancel');
+  // „Mayonnaise“: zuerst ein Lebensmittel-Topf; einmal von Hand auf Ladenausgabe -> gelernt
+  await expensePot('Mayonnaise');
+  await fatih.selectOption('#dlgBody [name=paid_from]', laden.id);
+  await fatih.fill('#dlgBody [name=amount]', '3,49');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(async () => true);
+  await fatih.waitForTimeout(500);
+  const learned = (await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Ladenausgabe').keywords;
+  assert.ok(learned.includes('mayonnaise'), 'gelernt: ' + learned);
+  assert.match(await expensePot('Mayonnaise und Ketchup'), /Ladenausgabe/, 'nächstes Mal automatisch');
+  await fatih.click('#dlgCancel');
+  // Stichwörter stehen im Formular und lassen sich ändern
+  await frau.evaluate(() => render());
+  await frau.waitForSelector('#potList .pot');
+  const ladenIdx = await frau.$$eval('#potList .pot', (cards) => cards.findIndex((c) => c.querySelector('.title').textContent.includes('Ladenausgabe')));
+  await frau.click(`#potList .pot:nth-child(${ladenIdx + 1}) [data-pot-edit]`);
+  await frau.waitForSelector('#dlg[open]');
+  assert.match(await frau.inputValue('#dlgBody [name=keywords]'), /mayonnaise/);
+  assert.match(await frau.textContent('#dlgBody'), /Angelegt von Partnerin/);
+  await frau.waitForTimeout(250);
+  await shot(frau, 'cloud-24-topf-stichwoerter.png');
+  await frau.click('#dlgCancel');
+  await api(fatih, 'DELETE', `/api/pots/${laden.id}`);
+  await api(fatih, 'DELETE', `/api/pots/${anlage.id}`);
+  await frau.evaluate(() => switchTab('overview'));
+
   // ---------- 6f. Gegenseitig ansehen (Freigabe, nur lesen) ----------
   await frau.click('[data-tab=account]');
   await frau.waitForSelector('#shareCard:not([hidden])');
