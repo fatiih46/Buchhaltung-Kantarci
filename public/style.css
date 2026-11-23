@@ -427,3 +427,22 @@ dialog[open]::backdrop { animation: fade-in .16s ease-out; }
 .pot .pot-entries { margin: .3rem 0 .6rem; }
 .cat-pick { display: flex; flex-direction: column; gap: .25rem; max-height: 220px; overflow-y: auto; }
 .cat-pick label.check { font-size: .9rem; }
+
+/* Reichen eure Budgets? */
+.month-boxes { display: flex; gap: 4px; margin: .35rem 0 .2rem; }
+.month-boxes .mb { width: 18px; height: 18px; border-radius: 5px; background: var(--line); }
+.month-boxes .mb.okay { background: var(--ok); }
+.month-boxes .mb.over { background: var(--danger); }
+#budgetCheck li { cursor: pointer; }
+
+/* Gegenseitig ansehen */
+.view-as { font: inherit; font-size: .85rem; color: var(--primary-text); background: rgba(255,255,255,.15); border: 0; border-radius: 8px;
+  padding: .15rem .4rem; min-height: 0; width: auto; max-width: 100%; margin-top: .1rem; }
+.view-as option { color: var(--text); background: var(--card); }
+.view-banner { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .5rem 1rem;
+  background: #fff4d6; color: #6b4e00; font-size: .9rem; border-bottom: 1px solid var(--line); }
+@media (prefers-color-scheme: dark) { .view-banner { background: #3a3014; color: #f3dc9a; } }
+body.readonly #fab, body.readonly .del-btn, body.readonly [data-quick], body.readonly #addIncome, body.readonly #addFixed,
+body.readonly #addEntry, body.readonly #listAdd, body.readonly [data-pay], body.readonly [data-amove], body.readonly .att-buttons,
+body.readonly .att-del, body.readonly .att-mini, body.readonly #editPrices, body.readonly #zakatFromAssets, body.readonly [data-zpay],
+body.readonly #kasseBox, body.readonly .quick { display: none !important; }

@@ -282,7 +282,7 @@
     await ensureData();
     const [hh, members] = await Promise.all([
       sb.from('households').select('name, invite_code').eq('id', member.household_id).single(),
-      sb.from('members').select('user_id, name').order('created_at'),
+      sb.from('members').select('user_id, name, share_all').order('created_at'),
     ]);
     if (hh.error || members.error) throw offline(hh.error || members.error);
     // „zuletzt aktiv“ für die Nutzer-Übersicht des Besitzers (nur der Zeitpunkt), einmal pro Öffnen
@@ -291,7 +291,7 @@
     return {
       user: { id: auth.uid, name: member.name, email: auth.email },
       household: { name: hh.data.name, inviteCode: hh.data.invite_code },
-      members: members.data.map((m) => ({ id: m.user_id, name: m.name })),
+      members: members.data.map((m) => ({ id: m.user_id, name: m.name, shareAll: !!m.share_all })),
       isAdmin: admin.data === true,
       noticeAccepted: !!auth.meta.accepted_notice,
     };
@@ -355,15 +355,41 @@
   }
   async function logout() {
     await queue;
+    if (view) { view.raw.close(); view = null; }
     await sb.auth.signOut().catch(() => {});
     reset();
     return { ok: true };
   }
   // Belege: Liste mit zeitlich begrenzten Links zu den Dateien
-  async function attachments(query) {
-    const list = core.match('GET', '/api/attachments').route.handler({ user: ME, query, body: {}, params: {} });
+  // ---------- Daten des Partners ansehen (nur lesen, wenn er/sie es unter ⚙ freigegeben hat) ----------
+  let view = null; // { uid, name, raw, db, core }
+  Cloud.setView = async (uid, name) => {
+    await init();
+    await ensureData();
+    if (view) { view.raw.close(); view = null; }
+    if (!uid) return;
+    const { data, error } = await sb.from('user_data').select('data').eq('user_id', uid).maybeSingle();
+    if (error) throw offline(error);
+    if (!data) throw new HttpError(403, `${name} hat die eigenen Einträge (noch) nicht freigegeben.`);
+    const r = new SQL.Database(fromB64(data.data));
+    const vdb = wrap(r);
+    const vcore = C.createCore(vdb, {});
+    vcore.migrate(); // nur im Speicher – gespeichert wird hier nichts
+    view = { uid, name, raw: r, db: vdb, core: vcore };
+  };
+  Cloud.viewing = () => (view ? view.name : null);
+  const readOnly = () => new HttpError(403, `Du siehst gerade die Einträge von ${view.name} – ändern kann nur ${view.name} selbst. Oben auf „Meine Daten“ wechseln.`);
+  async function setShare(input) {
+    await requireAuth();
+    const { error } = await sb.rpc('set_share_all', { p_share: !!input.share });
+    if (error) throw offline(error);
+    return { ok: true };
+  }
+
+  async function attachments(query, ctx = { core, db }) {
+    const list = ctx.core.match('GET', '/api/attachments').route.handler({ user: ME, query, body: {}, params: {} });
     if (!list.length) return [];
-    const paths = list.map((a) => db.prepare('SELECT file_path FROM attachments WHERE id = ?').get(a.id).file_path);
+    const paths = list.map((a) => ctx.db.prepare('SELECT file_path FROM attachments WHERE id = ?').get(a.id).file_path);
     const { data } = await sb.storage.from(BUCKET).createSignedUrls(paths, 3600);
     return list.map((a, i) => ({ ...a, url: data?.[i]?.signedUrl || '' }));
   }
@@ -388,10 +414,17 @@
       const { data } = await sb.storage.from(BUCKET).createSignedUrls(paths, 3600);
       (data || []).forEach((x) => { if (x.signedUrl) urls[x.path] = x.signedUrl; });
     }
+    // letzte 6 Monate für „Reichen eure Budgets?“
+    const [y0, m0] = month.split('-').map(Number);
+    const last6 = Array.from({ length: 6 }, (_, i) => { const d = new Date(y0, m0 - 6 + i, 1); return monthKey(d); });
     const list = pots.data.map((p) => {
       const mine = entries.data.filter((e) => e.pot_id === p.id);
+      const history = C.budgetReport(`${p.icon} ${p.name}`, last6.map((m) => {
+        const st = C.potStatus(p.plan, mine, m);
+        return { month: m, budget: st.active ? st.amount : 0, spent: st.spent };
+      }), { potId: p.id, shared: true });
       return {
-        id: p.id, name: p.name, icon: p.icon, categories: p.categories || [], plan: p.plan,
+        id: p.id, name: p.name, icon: p.icon, categories: p.categories || [], plan: p.plan, history,
         ...C.potStatus(p.plan, mine, month),
         entries: monthEntries.filter((e) => e.pot_id === p.id).sort((a, b) => String(b.date).localeCompare(String(a.date)))
           .map((e) => ({ id: e.id, date: String(e.date).slice(0, 10), amount: toNum(e.amount), shop: e.shop, note: e.note,
@@ -442,6 +475,7 @@
   Cloud.addPotEntry = async (body, file) => {
     await init();
     await ensureData();
+    if (view) throw readOnly();
     const date = C.dateStr(body.date);
     const amount = C.num(body.amount, 'Betrag', { min: 0.01 });
     if (!body.pot_id) throw new HttpError(400, 'Bitte eine Kasse auswählen.');
@@ -478,6 +512,9 @@
     if (path === '/api/password' && method === 'POST') return changePassword(input);
     if (path === '/api/forgot' && method === 'POST') return forgotPassword(input);
     if (path === '/api/notice' && method === 'POST') return acceptNotice();
+    if (path === '/api/share' && method === 'POST') return setShare(input);
+    // beim Ansehen fremder Daten ist alles andere als Lesen gesperrt
+    if (view && method !== 'GET') throw readOnly();
     if (path === '/api/admin/users') return adminUsers();
     const adminUser = path.match(/^\/api\/admin\/users\/([0-9a-f-]{36})(\/ban)?$/);
     if (adminUser && method === 'POST' && adminUser[2]) return adminRpc('admin_set_banned', { p_user: adminUser[1], p_banned: !!input.banned });
@@ -492,7 +529,13 @@
     if (pm && method === 'DELETE') return deletePotRow('pots', pm[1]);
     pm = path.match(new RegExp(`^/api/pot-entries/${UUID}$`));
     if (pm && method === 'DELETE') return deletePotRow('pot_entries', pm[1]);
-    if (path === '/api/attachments' && method === 'GET') return attachments(u.searchParams);
+    if (path === '/api/attachments' && method === 'GET') return attachments(u.searchParams, view || { core, db });
+    if (view && method === 'GET') {
+      // Lesen aus der Datenbank des Partners (Kopie im Speicher)
+      const found = view.core.match(method, path);
+      if (!found) throw new HttpError(404, 'Nicht gefunden.');
+      return clone(found.route.handler({ user: ME, body: input, params: found.params, query: u.searchParams }));
+    }
     if (!core.match(method, path)) throw new HttpError(404, 'Nicht gefunden.');
     const call = () => {
       const found = core.match(method, path); // nach dem Neuladen gehört die Route zur neuen Datenbank
@@ -505,6 +548,7 @@
   Cloud.upload = async (type, id, file) => {
     await init();
     await ensureData();
+    if (view) throw readOnly();
     const query = new URLSearchParams({ type, id: String(id) });
     const o = core.attOwner(ME.id, query);
     if (core.attCount(o.type, o.id) >= core.MAX_FILES_PER_ITEM) throw new HttpError(400, `Maximal ${core.MAX_FILES_PER_ITEM} Belege pro Eintrag.`);

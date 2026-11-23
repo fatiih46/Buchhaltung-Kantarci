@@ -243,13 +243,13 @@ function staticServer() {
   const curYm = `${realNow.getFullYear()}-${String(realNow.getMonth() + 1).padStart(2, '0')}`;
   const nextD = new Date(realNow.getFullYear(), realNow.getMonth() + 1, 1);
   const nextYm = `${nextD.getFullYear()}-${String(nextD.getMonth() + 1).padStart(2, '0')}`;
-  await fatih.evaluate((m) => { state.month = m; switchTab('kasse'); }, curYm);
+  await fatih.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
   await fatih.waitForSelector('#potEmpty:not([hidden])');
   await fatih.click('#potTemplate');
   await fatih.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 3);
   assert.match(await fatih.textContent('#kasseTotals'), /Noch übrig\s*400,00/);
   // Partnerin sieht dieselben Kassen und scannt einen Tankbeleg -> landet automatisch in „Tanken“
-  await frau.evaluate((m) => { state.month = m; switchTab('kasse'); }, curYm);
+  await frau.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
   await frau.waitForFunction(() => document.querySelectorAll('#potList .pot').length === 3);
   const dd = `${String(realNow.getDate()).padStart(2, '0')}.${String(realNow.getMonth() + 1).padStart(2, '0')}.${realNow.getFullYear()}`;
   const tankPage = await browser.newPage({ viewport: { width: 640, height: 520 } });
@@ -290,6 +290,12 @@ ${dd}      17:12
   assert.equal(k1.totals.available, 338.5);
   await fatih.waitForTimeout(250);
   await shot(fatih, 'cloud-20-kasse.png', true);
+  // Reichen die Budgets? (gemeinsame Budgets erscheinen in der Auswertung)
+  await fatih.evaluate((m) => { state.month = m; switchTab('stats'); }, curYm);
+  await fatih.waitForFunction(() => document.querySelector('#budgetCheck').textContent.includes('Tanken'));
+  assert.match(await fatih.textContent('#budgetCheck'), /gemeinsam/);
+  assert.equal(await fatih.$$eval('#budgetCheck .mb', (els) => els.length >= 6), true);
+  await fatih.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
   // nächster Monat: Rest wird übertragen
   const k2 = await api(fatih, 'GET', `/api/pots?month=${nextYm}`);
   const tank2 = k2.pots.find((p) => p.name === 'Tanken');
@@ -307,6 +313,67 @@ ${dd}      17:12
   assert.equal((await api(fatih, 'GET', `/api/pots?month=${curYm}`)).totals.available, 400);
   await fatih.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
   await frau.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
+
+  // ---------- 6e. Kategorie aus freiem Text erkennen ----------
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=ausgabe]');
+  await fatih.waitForSelector('#dlg[open]');
+  await fatih.fill('#dlgBody [name=note]', 'Auto heile machen');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=category]').value === 'Auto & Verschleiß');
+  assert.match(await fatih.textContent('#dlgBody [data-auto-cat]'), /Erkannt: Auto & Verschleiß/);
+  // und die passende gemeinsame Kasse (Tanken hat „Auto & Verschleiß“)
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=paid_from]').selectedOptions[0].textContent.includes('Tanken'));
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-21-text-erkannt.png');
+  await fatih.click('#dlgCancel');
+  // Fixkosten: Name „Kfz-Steuer“ -> Auto
+  await fatih.click('#fab');
+  await fatih.click('[data-qa=fix]');
+  await fatih.fill('#dlgBody [name=name]', 'Kita Gebühr');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=category]').value === 'Kinder');
+  await fatih.click('#dlgCancel');
+
+  // ---------- 6f. Gegenseitig ansehen (Freigabe, nur lesen) ----------
+  await frau.click('[data-tab=account]');
+  await frau.waitForSelector('#shareCard:not([hidden])');
+  assert.equal(await frau.isChecked('#shareAll'), false);
+  assert.equal(await frau.isVisible('#viewAs'), false, 'ohne Freigabe kein Umschalter');
+  await fatih.click('[data-tab=account]');
+  await fatih.waitForSelector('#shareCard:not([hidden])');
+  await fatih.check('#shareAll');
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('Freigegeben'));
+  await frau.reload();
+  await frau.waitForSelector('#app:not([hidden])');
+  await frau.waitForSelector('#viewAs:not([hidden])');
+  await frau.selectOption('#viewAs', { label: '👀 Fatih' });
+  await frau.waitForSelector('#viewBanner:not([hidden])');
+  await frau.evaluate(() => { state.month = '2026-11'; state.kosten = 'variabel'; switchTab('kosten'); });
+  await frau.waitForFunction(() => document.querySelector('#entryList').textContent.includes('Lidl'));
+  assert.equal(await frau.isVisible('#fab'), false, 'kein ＋ beim Ansehen');
+  assert.equal(await frau.$$eval('#entryList .del-btn', (els) => els.filter((e) => e.offsetParent).length), 0, 'kein −');
+  await frau.click('#entryList li[data-id]');
+  await frau.waitForSelector('#dlg[open]');
+  assert.match(await frau.textContent('#dlgTitle'), /nur ansehen/);
+  assert.equal(await frau.isVisible('#dlgForm button[type=submit]'), false);
+  assert.equal(await frau.isDisabled('#dlgBody [name=amount]'), true);
+  await frau.waitForTimeout(250);
+  await shot(frau, 'cloud-22-partner-ansehen.png');
+  await frau.click('#dlgCancel');
+  assert.match(await apiErr(frau, 'POST', '/api/entries', { kind: 'mehr', date: '2026-11-05', category: 'Sonstiges', amount: '1' }), /ändern kann nur Fatih/);
+  // zurück zu den eigenen Daten
+  await frau.click('#viewBack');
+  await frau.waitForSelector('#viewBanner', { state: 'hidden' });
+  assert.equal(await frau.isVisible('#fab'), true);
+  assert.ok(!(await api(frau, 'GET', '/api/entries?month=2026-11')).some((e) => e.shop === 'Lidl'), 'wieder eigene Daten');
+  // Freigabe zurücknehmen
+  await fatih.uncheck('#shareAll');
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('ausgeschaltet'));
+  await frau.reload();
+  await frau.waitForSelector('#app:not([hidden])');
+  await frau.waitForTimeout(300);
+  assert.equal(await frau.isVisible('#viewAs'), false);
+  await fatih.click('.topnav [data-tab=overview]');
+  await frau.click('.topnav [data-tab=overview]');
 
   // ---------- 7. Zweites Gerät von Fatih: gleichzeitige Änderungen gehen nicht verloren ----------
   const handy = await newPage('handy');

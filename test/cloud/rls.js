@@ -140,6 +140,20 @@ const assert = require('assert/strict');
   assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/privat.jpg`])).length, 0, 'private Belege: nur die Person selbst');
   assert.equal((await as(E, `delete from storage.objects where name = $1 returning 1`, [`${B}/bon.jpg`])).length, 0, 'Fremde nicht');
   assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/bon.jpg`])).length, 1, 'Kassenbon: Haushalt darf mitlöschen');
+  // Gegenseitig ansehen: erst nach Freigabe, nur lesen, nur im eigenen Haushalt
+  await as(B, `insert into user_data (user_id, data) values ($1, 'BBB')`, [B]);
+  assert.equal((await as(A, `select * from user_data where user_id = $1`, [B])).length, 0, 'ohne Freigabe nichts');
+  assert.equal((await as(A, `select name from storage.objects where name = $1`, [`${B}/privat.jpg`])).length, 0);
+  await as(B, `select public.set_share_all(true)`);
+  assert.equal((await as(A, `select data from user_data where user_id = $1`, [B]))[0].data, 'BBB', 'nach Freigabe lesbar');
+  assert.equal((await as(A, `select name from storage.objects where name = $1`, [`${B}/privat.jpg`])).length, 1, 'Belege auch');
+  assert.equal((await as(A, `update user_data set data = 'X' where user_id = $1 returning 1`, [B])).length, 0, 'aber nicht änderbar');
+  assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/privat.jpg`])).length, 0, 'und nicht löschbar');
+  assert.equal((await as(E, `select * from user_data where user_id = $1`, [B])).length, 0, 'andere Haushalte nie');
+  assert.equal((await as(B, `select * from user_data where user_id = $1`, [A])).length, 0, 'Freigabe gilt nur in eine Richtung');
+  await assert.rejects(as(A, `update public.members set share_all = true where user_id = $1`, [B]), /permission denied|row-level/, 'Freigabe nur selbst');
+  await as(B, `select public.set_share_all(false)`);
+  assert.equal((await as(A, `select * from user_data where user_id = $1`, [B])).length, 0, 'zurückgenommen');
   // Löschen eines Topfs entfernt seine Ausgaben
   await as(A, `delete from public.pots where id = $1`, [pot]);
   assert.equal((await pg.query('select count(*)::int n from public.pot_entries')).rows[0].n, 0);

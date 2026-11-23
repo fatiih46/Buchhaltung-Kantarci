@@ -337,3 +337,34 @@ create policy "belege_select_household_pot" on storage.objects for select to aut
 create policy "belege_delete_household_pot" on storage.objects for delete to authenticated using (
   bucket_id = 'belege' and exists (
     select 1 from public.pot_entries e where e.file_path = name and e.household_id = public.my_household()));
+
+-- ---------- Gegenseitig ansehen (Freigabe pro Person, nur lesen) ----------
+-- Jede Person entscheidet selbst unter ⚙, ob die anderen im Haushalt ALLE ihre Einträge und Belege sehen dürfen.
+-- Ändern kann weiterhin nur jede Person ihre eigenen Daten.
+alter table public.members add column if not exists share_all boolean not null default false;
+
+create or replace function public.set_share_all(p_share boolean)
+returns void language sql volatile security definer set search_path = public as $$
+  update public.members set share_all = coalesce(p_share, false) where user_id = auth.uid()
+$$;
+
+-- hat p_user (als Text, z. B. Ordnername im Speicher) mir im selben Haushalt alles freigegeben?
+create or replace function public.shares_with_me(p_user text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.members m
+    where m.user_id::text = p_user and m.share_all and m.user_id <> auth.uid()
+      and m.household_id = public.my_household())
+$$;
+
+drop policy if exists "user_data_select_shared" on public.user_data;
+create policy "user_data_select_shared" on public.user_data for select to authenticated
+  using (public.shares_with_me(user_id::text));
+
+drop policy if exists "belege_select_shared" on storage.objects;
+create policy "belege_select_shared" on storage.objects for select to authenticated
+  using (bucket_id = 'belege' and public.shares_with_me((storage.foldername(name))[1]));
+
+revoke all on function public.set_share_all(boolean) from public, anon;
+revoke all on function public.shares_with_me(text) from public, anon;
+grant execute on function public.set_share_all(boolean) to authenticated;
+grant execute on function public.shares_with_me(text) to authenticated;

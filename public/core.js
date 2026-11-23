@@ -464,6 +464,18 @@ function statsFor(userId, month) {
     const s = m === month ? cur : summaryFor(userId, m);
     return { month: m, spent: s.spent, fixedTotal: s.fixedTotal, income: s.income, available: s.available };
   });
+  // Reichen die Budgets? Pro Budget-Kategorie die letzten 6 Monate: Budget gegen tatsächliche Ausgaben
+  const budgetItems = db.prepare("SELECT * FROM fixed_costs WHERE user_id = ? AND kind = 'budget'").all(userId);
+  const budgetCats = [...new Set(budgetItems.map((f) => f.category))];
+  const spentStmt = db.prepare("SELECT COALESCE(SUM(amount), 0) AS s FROM entries WHERE user_id = ? AND kind = 'mehr' AND category = ? AND substr(date, 1, 7) = ?");
+  const budgetHistory = budgetCats.map((cat) => {
+    const items = budgetItems.filter((f) => f.category === cat);
+    return budgetReport(cat, months.map((m) => ({
+      month: m,
+      budget: round2(items.reduce((t, f) => t + fixedAmountFor(f, m), 0)),
+      spent: round2(spentStmt.get(userId, cat, m).s),
+    })), { fixedId: items.length === 1 ? items[0].id : null });
+  });
 
   // Durchschnitt der 3 Vormonate, nur Monate mit erfassten Ausgaben
   const prevMonths = months.slice(2, 5);
@@ -539,7 +551,7 @@ function statsFor(userId, month) {
     month, summary: cur, byShop, trend, avgSpent, activeMonths,
     count: entries.length, avgPurchase: entries.length ? round2(cur.spent / entries.length) : 0,
     smallCount: small.length, smallTotal: round2(small.reduce((s, e) => s + e.amount, 0)),
-    top, tips, potential,
+    top, tips, potential, budgetHistory,
     savingsRate: cur.income > 0 ? Math.round((cur.available / cur.income) * 100) : null,
   };
 }
@@ -1119,7 +1131,8 @@ function cleanFileName(name) {
 
 // ---------- Gemeinsame Kasse: Stand eines Topfs in einem Monat ----------
 // plan: [{from: 'JJJJ-MM', amount, carryover}] (sortiert oder nicht), entries: [{date, amount}]
-// Rest wandert in den nächsten Monat, wenn carryover gilt (auch ein Minus: überzogen = nächster Monat weniger).
+// Ein Rest wandert in den nächsten Monat, wenn carryover gilt. Ein Überschreiten wird NICHT abgezogen –
+// es wird nur angezeigt und in der Auswertung („Reichen eure Budgets?“) mitgezählt.
 const mIdx = (ym) => { const [y, m] = ym.split('-').map(Number); return y * 12 + (m - 1); };
 const mStr = (i) => `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
 function potStatus(plan, entries, month) {
@@ -1134,10 +1147,35 @@ function potStatus(plan, entries, month) {
     const spent = round2(spentBy[m] || 0);
     const available = round2(carry + Number(step.amount) - spent);
     if (m === month) return { active: true, carryIn: round2(carry), amount: Number(step.amount), spent, available, carryover: !!step.carryover };
-    carry = step.carryover ? available : 0;
+    carry = step.carryover ? Math.max(0, available) : 0;
   }
   return { active: false, carryIn: 0, amount: 0, spent: 0, available: 0, carryover: true };
 }
+// Auswertung eines Budgets über mehrere Monate: wie oft überschritten, Durchschnitt, Vorschlag
+// months: [{month, budget, spent}] – Monate ohne Budget zählen nicht
+function budgetReport(name, months, extra = {}) {
+  const active = months.filter((m) => m.budget > 0);
+  const over = active.filter((m) => m.spent > m.budget);
+  const avgSpent = active.length ? round2(active.reduce((t, m) => t + m.spent, 0) / active.length) : 0;
+  const avgBudget = active.length ? round2(active.reduce((t, m) => t + m.budget, 0) / active.length) : 0;
+  const lastBudget = active.length ? active[active.length - 1].budget : 0;
+  const roundUp = (v) => Math.ceil(v / 10) * 10;
+  let level = 'ok', advice = '';
+  if (active.length >= 2 && over.length >= Math.ceil(active.length / 2)) {
+    level = 'warn';
+    advice = `Meistens überschritten – Budget auf etwa ${roundUp(avgSpent)} € anpassen oder mehr aufpassen.`;
+  } else if (over.length) {
+    level = 'info';
+    advice = `${over.length}× überschritten – im Auge behalten.`;
+  } else if (active.length >= 3 && avgSpent < lastBudget * 0.7) {
+    level = 'low';
+    advice = `Großzügig geplant – im Schnitt nur ${avgSpent.toLocaleString('de-DE')} € gebraucht, Budget ließe sich senken.`;
+  } else if (active.length) {
+    advice = 'Passt – Budget reicht.';
+  }
+  return { name, months, overCount: over.length, activeCount: active.length, avgSpent, avgBudget, level, advice, ...extra };
+}
+
 // Plan ab einem Monat ändern (frühere Monate bleiben wie sie waren)
 function potPlanUpdate(plan, month, amount, carryover) {
   const rest = (plan || []).filter((s) => s.from < month);
@@ -1145,5 +1183,5 @@ function potPlanUpdate(plan, month, amount, carryover) {
 }
 
 return { createCore, HttpError, CATEGORIES, INTERVALS, UPLOAD_TYPES, MAX_UPLOAD, fileMatchesType, cleanFileName,
-  round2, str, num, dateStr, monthStr, potStatus, potPlanUpdate };
+  round2, str, num, dateStr, monthStr, potStatus, potPlanUpdate, budgetReport };
 });

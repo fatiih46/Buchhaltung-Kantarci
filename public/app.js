@@ -259,7 +259,7 @@ async function boot() {
   $('#app').hidden = false;
   $('#hhName').textContent = state.me.household.name;
   $('#hello').textContent = `Hallo ${state.me.user.name}`;
-  $('.topnav [data-tab=kasse]').hidden = !window.Cloud?.enabled; // gemeinsame Kasse braucht die Cloud
+  setupViewSwitch();
   // bestehende Konten: Hinweis einmal anzeigen; danach (oder sonst) einmal „Neu in dieser Version“
   if (noticeJustAccepted) { noticeJustAccepted = false; rememberNotice(); showNewsOnce({ skip: true }); }
   else if (!noticeSeen()) showNotice().then(rememberNotice).then(() => showNewsOnce());
@@ -279,7 +279,6 @@ async function render() {
   try {
     if (state.tab === 'overview') await renderOverview();
     if (state.tab === 'kosten') await renderKosten();
-    if (state.tab === 'kasse') await renderKasse();
     if (state.tab === 'stats') await renderStats();
     if (LIST_TABS.includes(state.tab)) await renderLists();
     if (state.tab === 'household') await renderHousehold();
@@ -374,8 +373,11 @@ $$('[data-kosten]').forEach((b) => b.addEventListener('click', () => { state.kos
 async function renderKosten() {
   $$('[data-kosten]').forEach((b) => b.classList.toggle('active', b.dataset.kosten === state.kosten));
   $$('[data-kostenview]').forEach((v) => { v.hidden = v.dataset.kostenview !== state.kosten; });
+  // gemeinsame Budgets gibt es nur mit der Cloud (sie gehören dem Haushalt)
+  const shared = state.kosten === 'fix' && !!window.Cloud?.enabled;
+  $('#kasseBox').hidden = !shared;
   if (state.kosten === 'variabel') return renderEntries();
-  return renderPlan();
+  return Promise.all([renderPlan(), shared ? renderKasse() : null]);
 }
 async function renderPlan() {
   const [incomes, fixed] = await Promise.all([api('GET', `/api/incomes?month=${state.month}`), api('GET', `/api/fixed?month=${state.month}`)]);
@@ -449,7 +451,7 @@ async function renderKasse() {
         <span class="pot-icon">${esc(p.icon)}</span>
         <div class="grow"><div class="title">${esc(p.name)} <span class="muted small">✎</span></div>
           <div class="meta">${fmt(p.amount)} / Monat${p.carryIn ? ` · Übertrag ${p.carryIn > 0 ? '+' : ''}${fmt(p.carryIn)}` : ''} · ausgegeben ${fmt(p.spent)}${p.carryover ? '' : ' · ohne Übertrag'}</div></div>
-        <div class="right"><div class="pot-avail num ${p.available < 0 ? 'neg' : 'pos'}">${fmt(p.available)}</div><div class="meta">${p.available < 0 ? 'überzogen' : 'noch übrig'}</div></div>
+        <div class="right"><div class="pot-avail num ${p.available < 0 ? 'neg' : 'pos'}">${p.available < 0 ? fmt(-p.available) : fmt(p.available)}</div><div class="meta">${p.available < 0 ? 'überschritten' : 'noch übrig'}</div></div>
       </div>
       <div class="progress ${p.available < 0 ? 'over' : ''}"><i style="width:${pct}%"></i></div>
       ${p.entries.length ? `<ul class="list compact pot-entries">${p.entries.map((e) => `<li>
@@ -472,7 +474,7 @@ $('#potAdd').addEventListener('click', () => openPotDialog());
 $('#potTemplate').addEventListener('click', async () => {
   try {
     for (const t of POT_TEMPLATES) await api('POST', '/api/pots', { ...t, carryover: true, month: state.month });
-    toast('Kassen angelegt – Beträge antippen zum Ändern');
+    toast('Budgets angelegt – zum Ändern antippen');
     render();
   } catch (err) { toast(err.message); }
 });
@@ -533,6 +535,7 @@ $('#addEntry').addEventListener('click', () => openEntryDialog({ kind: 'mehr' })
 const shortMonth = (m) => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('de-DE', { month: 'short' }); };
 async function renderStats() {
   const st = await api('GET', `/api/stats?month=${state.month}`);
+  renderBudgetCheck(st.budgetHistory);
   const s = st.summary;
   const delta = st.avgSpent != null ? s.spent - st.avgSpent : null;
   $('#statsKpis').innerHTML = `
@@ -592,6 +595,39 @@ async function renderStats() {
       <div class="right num">${fmt(e.amount)}</div></li>`).join('') : '<li class="muted small">Keine Ausgaben.</li>';
 }
 
+// ---------- Reichen eure Budgets? (eigene Budgets + gemeinsame Budgets) ----------
+let budgetCheckRows = [];
+async function renderBudgetCheck(own) {
+  let shared = [];
+  if (window.Cloud?.enabled) {
+    try { shared = (await api('GET', `/api/pots?month=${state.month}`)).pots.map((p) => p.history); } catch { /* ohne gemeinsame Budgets */ }
+  }
+  budgetCheckRows = [...shared, ...(own || [])].filter((r) => r.activeCount > 0);
+  const LEVEL = { warn: 'neg', info: '', low: 'muted', ok: 'pos' };
+  $('#budgetCheck').innerHTML = budgetCheckRows.length ? budgetCheckRows.map((r, i) => `
+    <li data-budget-row="${i}">
+      <div class="grow">
+        <div class="title">${r.shared ? '' : '👤 '}${esc(r.name)}${r.shared ? ' <span class="muted small">gemeinsam</span>' : ''}</div>
+        <div class="month-boxes">${r.months.map((m) => `<span class="mb ${!m.budget ? 'none' : m.spent > m.budget ? 'over' : 'okay'}" title="${monthLabel(m.month)}: ${fmt(m.spent)} von ${fmt(m.budget)}"></span>`).join('')}</div>
+        <div class="meta ${LEVEL[r.level]}">${esc(r.advice)}</div>
+      </div>
+      <div class="right small">Ø ausgegeben<div class="num"><strong>${fmt(r.avgSpent)}</strong></div><div class="muted">von ${fmt(r.avgBudget)}</div></div>
+    </li>`).join('') : '<li class="muted small">Noch keine Budgets mit Ausgaben – lege unter „Kosten → Fixkosten“ ein Budget an.</li>';
+}
+$('#budgetCheck').addEventListener('click', async (e) => {
+  const row = e.target.closest('[data-budget-row]');
+  if (!row) return;
+  const r = budgetCheckRows[Number(row.dataset.budgetRow)];
+  if (r.potId) {
+    const pots = (await api('GET', `/api/pots?month=${state.month}`)).pots;
+    const pot = pots.find((p) => p.id === r.potId);
+    if (pot) openPotDialog(pot);
+  } else if (r.fixedId) {
+    const f = (await api('GET', `/api/fixed?month=${state.month}`)).find((x) => x.id === r.fixedId);
+    if (f) openFixedDialog(f);
+  } else { state.kosten = 'fix'; switchTab('kosten'); }
+});
+
 // ---------- Haushalt ----------
 async function renderHousehold() {
   const h = await api('GET', `/api/household?month=${state.month}`);
@@ -617,7 +653,38 @@ $('#copyInvite').addEventListener('click', async () => {
 });
 
 // ---------- Konto ----------
+// ---------- Gegenseitig ansehen ----------
+function setupViewSwitch() {
+  const others = (state.me.members || []).filter((m) => m.id !== state.me.user.id && m.shareAll);
+  const sel = $('#viewAs');
+  sel.hidden = !window.Cloud?.enabled || !others.length;
+  $('#hello').hidden = !sel.hidden;
+  sel.innerHTML = `<option value="">👤 ${esc(state.me.user.name)} (meine Daten)</option>` +
+    others.map((m) => `<option value="${m.id}">👀 ${esc(m.name)}</option>`).join('');
+  sel.value = state.viewing?.id || '';
+}
+async function switchView(id) {
+  const m = (state.me.members || []).find((x) => x.id === id);
+  try { await Cloud.setView(m ? m.id : null, m ? m.name : null); } catch (err) { toast(err.message); $('#viewAs').value = ''; return; }
+  state.viewing = m || null;
+  document.body.classList.toggle('readonly', !!m);
+  $('#viewBanner').hidden = !m;
+  $('#viewName').textContent = m ? m.name : '';
+  $('#viewAs').value = m ? m.id : '';
+  render();
+}
+$('#viewAs').addEventListener('change', (e) => switchView(e.target.value));
+$('#viewBack').addEventListener('click', () => switchView(''));
+$('#shareAll').addEventListener('change', async (e) => {
+  try {
+    await api('POST', '/api/share', { share: e.target.checked });
+    toast(e.target.checked ? 'Freigegeben – die anderen im Haushalt können deine Einträge jetzt ansehen' : 'Freigabe ausgeschaltet');
+  } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+});
+
 function renderAccount() {
+  $('#shareCard').hidden = !window.Cloud?.enabled || (state.me.members || []).length < 2;
+  $('#shareAll').checked = !!(state.me.members || []).find((m) => m.id === state.me.user.id)?.shareAll;
   $('#accountInfo').textContent = `${state.me.user.name} · ${state.me.user.email} · Haushalt „${state.me.household.name}“ (${state.me.members.map((m) => m.name).join(', ')})`;
   $('#adminCard').hidden = !state.me.isAdmin;
   if (state.me.isAdmin) renderAdmin();
@@ -765,6 +832,9 @@ window.addEventListener('haushalt:sync', () => { if (!$('#app').hidden) render()
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
   state.tab = 'overview';
+  state.viewing = null;
+  document.body.classList.remove('readonly');
+  $('#viewBanner').hidden = true;
   showAuth();
 });
 
@@ -783,6 +853,15 @@ function openDialog({ title, html, onSave, onDelete, onOpen }) {
   if (onOpen) onOpen($('#dlgBody'));
   $('#dlgError').textContent = '';
   $('#dlgDelete').hidden = !onDelete;
+  // Einträge des Partners: nur ansehen
+  const ro = !!state.viewing;
+  $('#dlgForm button[type=submit]').hidden = ro;
+  $('#dlgCancel').textContent = ro ? 'Schließen' : 'Abbrechen';
+  if (ro) {
+    $('#dlgDelete').hidden = true;
+    $('#dlgTitle').textContent = `${title} (nur ansehen)`;
+    $$('#dlgBody input, #dlgBody select, #dlgBody textarea, #dlgBody button').forEach((el) => { el.disabled = true; });
+  }
   dlgHandlers = { onSave, onDelete };
   dlg.showModal();
   const first = $('#dlgBody input, #dlgBody select');
@@ -806,6 +885,24 @@ $('#dlgDelete').addEventListener('click', async () => {
 
 const intervalSelect = (v = 1) => `<label>Wie oft?
   <select name="interval">${state.meta.intervals.map((i) => `<option value="${i}" ${i === v ? 'selected' : ''}>${INTERVAL_LABEL[i]}</option>`).join('')}</select></label>`;
+// Text in den Feldern lesen und die Kategorie vorschlagen, solange man sie nicht selbst gewählt hat
+function autoCategory(body, inputs, isTouched) {
+  const sel = $('[name=category]', body);
+  let timer;
+  const run = () => {
+    if (isTouched()) return;
+    const cat = window.HaushaltReceipt?.classifyText(inputs.map((i) => i.value).join(' '));
+    if (!cat || !state.meta.categories.includes(cat)) return;
+    sel.value = cat;
+    sel.classList.add('auto-filled');
+    let hint = $('[data-auto-cat]', body);
+    if (!hint) { hint = document.createElement('div'); hint.className = 'hint'; hint.dataset.autoCat = ''; sel.closest('label').after(hint); }
+    hint.textContent = `🤖 Erkannt: ${cat} – passt nicht? Einfach selbst auswählen.`;
+    body.lastScan = { ...(body.lastScan || {}), category: cat };
+    body.dispatchEvent(new CustomEvent('scanned', { detail: { category: cat } }));
+  };
+  inputs.forEach((i) => i.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 350); }));
+}
 const categorySelect = (v) => `<label>Kategorie
   <select name="category">${state.meta.categories.map((c) => `<option ${c === v ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>`;
 const amountInput = (v, label = 'Betrag (€)') =>
@@ -850,6 +947,11 @@ function openFixedDialog(item) {
         Bei einem Budget werden deine Ausgaben derselben Kategorie damit verrechnet.</div>
       ${endMonthInput(item?.end_month)}`,
     onOpen: (root) => {
+      if (!item) {
+        let catTouched = false;
+        $('[name=category]', root).addEventListener('change', () => { catTouched = true; });
+        autoCategory(root, [$('[name=name]', root)], () => catTouched);
+      }
       const EVERY = { 3: 'alle 3 Monate', 6: 'alle 6 Monate', 12: 'jedes Jahr' };
       const update = () => {
         const iv = Number($('[name=interval]', root).value);
@@ -919,12 +1021,14 @@ function openEntryDialog(item = {}) {
       const shop = $('[name=shop]', body);
       const sel = $('[name=category]', body);
       let touched = isEdit;
-      sel.addEventListener('change', () => { touched = true; });
+      sel.addEventListener('change', () => { touched = true; sel.classList.remove('auto-filled'); });
       shop.addEventListener('input', () => {
         if (touched || !shopCache) return;
         const hit = shopCache.find((x) => x.shop.toLowerCase() === shop.value.trim().toLowerCase());
         if (hit?.category) sel.value = hit.category;
       });
+      // Kategorie aus dem Text erkennen, z. B. Notiz „Auto heile machen“ -> Auto & Verschleiß
+      autoCategory(body, [$('[name=note]', body), shop], () => touched);
       // gemeinsame Kassen laden; nach dem Scannen passende Kasse anhand der Kategorie wählen
       const paid = $('[name=paid_from]', body);
       if (paid) {
