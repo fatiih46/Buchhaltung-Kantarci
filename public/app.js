@@ -151,11 +151,33 @@ async function fetchVersion() {
     return res.ok ? await res.json() : null;
   } catch { return null; } // offline – später erneut
 }
+// Neue Version: automatisch neu laden, sobald kein Fenster/Formular offen ist (Daten sind schon gespeichert).
+// Schutz gegen Endlosschleife: pro Version höchstens einmal automatisch – danach bleibt der Hinweis zum Antippen.
+let updatePending = false;
+const anyDialogOpen = () => !!document.querySelector('dialog[open]');
+function reloadForUpdate(auto) {
+  if (auto) {
+    try {
+      if (sessionStorage.getItem('auto-update') === updatePending) return false;
+      sessionStorage.setItem('auto-update', updatePending);
+    } catch { return false; }
+  }
+  location.reload();
+  return true;
+}
 async function checkForUpdate() {
   const v = await fetchVersion();
-  if (v && v.version && v.version !== LOADED_VERSION) $('#updateBar').hidden = false;
+  if (!v || !v.version || v.version === LOADED_VERSION) return;
+  updatePending = v.version;
+  if (!anyDialogOpen() && reloadForUpdate(true)) return;
+  $('#updateBar').hidden = false;
 }
-$('#updateNow').addEventListener('click', () => location.reload());
+// der ganze Balken ist der Knopf
+$('#updateBar').addEventListener('click', () => reloadForUpdate(false));
+// wurde ein Formular geschlossen und es wartet ein Update: jetzt neu laden
+document.addEventListener('close', () => {
+  if (updatePending && !anyDialogOpen()) setTimeout(() => { if (!anyDialogOpen()) reloadForUpdate(true); }, 400);
+}, true);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
 setInterval(checkForUpdate, 15 * 60 * 1000);
 // nach einem Update einmal zeigen, was neu ist

@@ -1,7 +1,7 @@
 {
-  "version": "2026.11.23-2",
+  "version": "2026.11.23-3",
   "notes": [
-    "🛡️ Mehr Sicherheit: Der Besitzer der App kann Konten sperren oder entfernen.",
-    "🔔 Die App meldet sich weiterhin von selbst, wenn es ein Update gibt."
+    "🔄 Updates kommen jetzt von selbst: Beim Öffnen lädt die App die neue Version automatisch.",
+    "🛡️ Der Besitzer der App kann Konten sperren oder entfernen (erst nach „⋯ Verwalten“ und mit Bestätigung)."
   ]
 }

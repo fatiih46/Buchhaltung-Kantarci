@@ -215,14 +215,17 @@ function staticServer() {
   // ---------- 6c. Update-Hinweis und „Neu in dieser Version“ ----------
   assert.equal(await fatih.isVisible('#updateBar'), false);
   serverVersion = { version: '2099.01.01', notes: ['Etwas Neues'] }; // auf Netlify liegt eine neuere Version
-  await fatih.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); // zurück in die App
+  // zurück in die App: neue Version wird automatisch geladen (einmal) – hier bleibt die geladene Seite alt,
+  // also erscheint danach der Hinweis zum Antippen (Schutz gegen Endlosschleife)
+  await fatih.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await fatih.waitForEvent('load');
   await fatih.waitForSelector('#updateBar:not([hidden])');
   await fatih.waitForTimeout(250);
   await shot(fatih, 'cloud-16-update-verfuegbar.png');
   // nach dem Neuladen ist die neue Version da: einmal zeigen, was neu ist
   serverVersion = { version: LOADED_VERSION, notes: ['📷 Kassenbon scannen', '🔔 Update-Hinweis'] };
   await fatih.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('version-gesehen-')).forEach((k) => localStorage.removeItem(k)));
-  await fatih.click('#updateNow');
+  await fatih.click('#updateBar');
   await fatih.waitForSelector('#newsDlg[open]');
   assert.match(await fatih.textContent('#newsList'), /Kassenbon scannen.*Update-Hinweis/s);
   assert.equal(await fatih.isVisible('#updateBar'), false, 'aktuelle Version: kein Update-Hinweis');
