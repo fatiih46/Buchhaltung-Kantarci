@@ -113,6 +113,11 @@ select public.make_admin('deine@email.de');
 Es erscheint „Fertig: … sieht jetzt die Nutzer-Übersicht.“ Danach die App neu laden → ⚙ → „👑 Wer nutzt die App?“.
 Aus der App heraus kann sich niemand selbst zum Besitzer machen.
 
+In der Übersicht kannst du Konten **🚫 sperren** (Anmeldung nicht mehr möglich, Daten bleiben, jederzeit wieder
+entsperrbar) oder **🗑️ endgültig löschen** (Konto und Daten weg; zur Sicherheit musst du den Namen eintippen).
+Dich selbst kannst du weder sperren noch löschen. Belegfotos einer gelöschten Person liegen danach noch im
+Supabase-Speicher (Storage → `belege` → Ordner mit ihrer Konto-ID) und lassen sich dort bei Bedarf löschen.
+
 ## Gut zu wissen
 
 | Thema | |

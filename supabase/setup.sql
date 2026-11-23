@@ -203,16 +203,20 @@ returns void language sql volatile security definer set search_path = public as 
 $$;
 
 -- Liste aller Konten – nur Name, E-Mail, Haushalt und Zeitpunkte, keine Einträge oder Beträge
-create or replace function public.admin_overview()
-returns table (name text, email text, household text, household_members integer, registered_at timestamptz,
-               last_sign_in_at timestamptz, last_seen_at timestamptz, last_saved_at timestamptz, confirmed boolean)
+-- (Rückgabe geändert -> alte Fassung erst entfernen, damit das Skript wiederholbar bleibt)
+drop function if exists public.admin_overview();
+create function public.admin_overview()
+returns table (user_id uuid, name text, email text, household text, household_members integer, registered_at timestamptz,
+               last_sign_in_at timestamptz, last_seen_at timestamptz, last_saved_at timestamptz, confirmed boolean,
+               banned boolean, is_me boolean)
 language plpgsql stable security definer set search_path = public as $$
 begin
   if not public.is_admin() then raise exception 'Nur für den Besitzer.'; end if;
   return query
-    select m.name, u.email::text, h.name,
+    select u.id, m.name, u.email::text, h.name,
            (select count(*)::integer from public.members m2 where m2.household_id = m.household_id),
-           u.created_at, u.last_sign_in_at, m.last_seen_at, d.updated_at, (u.email_confirmed_at is not null)
+           u.created_at, u.last_sign_in_at, m.last_seen_at, d.updated_at, (u.email_confirmed_at is not null),
+           coalesce(u.banned_until > now(), false), u.id = auth.uid()
     from auth.users u
     left join public.members m on m.user_id = u.id
     left join public.households h on h.id = m.household_id
@@ -230,6 +234,38 @@ begin
   return 'Fertig: ' || p_email || ' sieht jetzt die Nutzer-Übersicht.';
 end $$;
 
+-- Sperren / entsperren: gesperrte Konten können sich nicht mehr anmelden (Daten bleiben erhalten)
+create or replace function public.admin_set_banned(p_user uuid, p_banned boolean)
+returns void language plpgsql volatile security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'Nur für den Besitzer.'; end if;
+  if p_user = auth.uid() then raise exception 'Du kannst dich nicht selbst sperren.'; end if;
+  update auth.users set banned_until = case when p_banned then 'infinity'::timestamptz else null end where id = p_user;
+  if not found then raise exception 'Konto nicht gefunden.'; end if;
+end $$;
+
+-- Endgültig löschen: Konto samt Daten (Haushalt-Mitgliedschaft, gespeicherte Daten, Monatssummen);
+-- ein Haushalt ohne Mitglieder wird mit entfernt. Belegfotos liegen im Storage-Ordner mit der Konto-ID.
+create or replace function public.admin_delete_user(p_user uuid)
+returns text language plpgsql volatile security definer set search_path = public as $$
+declare v_household uuid;
+begin
+  if not public.is_admin() then raise exception 'Nur für den Besitzer.'; end if;
+  if p_user = auth.uid() then raise exception 'Du kannst dich nicht selbst löschen.'; end if;
+  select household_id into v_household from public.members where user_id = p_user;
+  delete from auth.users where id = p_user;
+  if not found then raise exception 'Konto nicht gefunden.'; end if;
+  if v_household is not null then
+    delete from public.households h where h.id = v_household
+      and not exists (select 1 from public.members m where m.household_id = h.id);
+  end if;
+  return p_user::text;
+end $$;
+
+revoke all on function public.admin_set_banned(uuid, boolean) from public, anon;
+revoke all on function public.admin_delete_user(uuid) from public, anon;
+grant execute on function public.admin_set_banned(uuid, boolean) to authenticated;
+grant execute on function public.admin_delete_user(uuid) to authenticated;
 revoke all on function public.is_admin() from public, anon;
 revoke all on function public.mark_active() from public, anon;
 revoke all on function public.admin_overview() from public, anon;

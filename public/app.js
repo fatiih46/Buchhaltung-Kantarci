@@ -530,7 +530,7 @@ function agoText(iso) {
 }
 async function renderAdmin() {
   let rows;
-  try { rows = await api('GET', '/api/admin/users'); } catch (err) { $('#adminList').innerHTML = `<li class="muted small">${esc(err.message)}</li>`; return; }
+  try { rows = adminRows = await api('GET', '/api/admin/users'); } catch (err) { $('#adminList').innerHTML = `<li class="muted small">${esc(err.message)}</li>`; return; }
   const lastActive = (r) => [r.last_seen_at, r.last_saved_at, r.last_sign_in_at].filter(Boolean).sort().pop() || null;
   const activeWithin = (days) => rows.filter((r) => { const t = lastActive(r); return t && Date.now() - new Date(t) <= days * DAY; }).length;
   const households = new Set(rows.map((r) => r.household).filter(Boolean)).size;
@@ -542,18 +542,50 @@ async function renderAdmin() {
   $('#adminList').innerHTML = rows.length ? rows.map((r) => {
     const t = lastActive(r);
     const fresh = t && Date.now() - new Date(t) <= 7 * DAY;
-    return `<li>
-      <span class="dot ${fresh ? 'on' : ''}" aria-hidden="true"></span>
+    return `<li class="admin-row ${r.banned ? 'banned' : ''}">
+      <span class="dot ${fresh && !r.banned ? 'on' : ''}" aria-hidden="true"></span>
       <div class="grow">
-        <div class="title">${esc(r.name || '(noch nicht eingerichtet)')}</div>
+        <div class="title">${esc(r.name || '(noch nicht eingerichtet)')}${r.is_me ? ' <span class="pill">du</span>' : ''}${r.banned ? ' <span class="pill banned-pill">gesperrt</span>' : ''}</div>
         <div class="meta">${esc(r.email)}${r.confirmed ? '' : ' · <span class="neg">E-Mail nicht bestätigt</span>'}</div>
         <div class="meta">${r.household ? `🏠 ${esc(r.household)}${r.household_members > 1 ? ` (${r.household_members} Personen)` : ''} · ` : ''}registriert ${new Date(r.registered_at).toLocaleDateString('de-DE')}</div>
+        ${r.is_me ? '' : `<div class="admin-actions">
+          <button type="button" class="btn small" data-ban="${r.user_id}" data-banned="${r.banned ? '1' : ''}">${r.banned ? '✅ Entsperren' : '🚫 Sperren'}</button>
+          <button type="button" class="btn small danger-text" data-kick="${r.user_id}">🗑️ Löschen</button>
+        </div>`}
       </div>
       <div class="right small">zuletzt aktiv<div class="${fresh ? 'pos' : 'muted'}"><strong>${agoText(t)}</strong></div></div>
     </li>`;
   }).join('') : '<li class="muted small">Noch niemand registriert.</li>';
 }
 $('#adminReload').addEventListener('click', renderAdmin);
+// Sperren / Entsperren / endgültig Löschen (immer mit Rückfrage)
+let adminRows = [];
+$('#adminList').addEventListener('click', async (e) => {
+  const ban = e.target.closest('[data-ban]');
+  const kick = e.target.closest('[data-kick]');
+  if (!ban && !kick) return;
+  const r = adminRows.find((x) => x.user_id === (ban || kick).dataset[ban ? 'ban' : 'kick']);
+  if (!r) return;
+  const who = r.name || r.email;
+  try {
+    if (ban) {
+      const banned = !ban.dataset.banned;
+      const q = banned
+        ? `${who} sperren?\n\n${who} kann sich dann nicht mehr anmelden (spätestens nach einer Stunde auch auf bereits angemeldeten Geräten). Die Daten bleiben erhalten – du kannst jederzeit wieder entsperren.`
+        : `${who} wieder entsperren?`;
+      if (!confirm(q)) return;
+      await api('POST', `/api/admin/users/${r.user_id}/ban`, { banned });
+      toast(banned ? `${who} ist gesperrt` : `${who} ist wieder freigeschaltet`);
+    } else {
+      const typed = prompt(`${who} ENDGÜLTIG löschen?\n\nKonto und alle Daten von ${who} werden gelöscht. Das kann nicht rückgängig gemacht werden.\n\nZum Bestätigen bitte den Namen eintippen: ${who}`);
+      if (typed == null) return;
+      if (typed.trim().toLowerCase() !== who.trim().toLowerCase()) { toast('Name stimmt nicht – nichts gelöscht.'); return; }
+      await api('DELETE', `/api/admin/users/${r.user_id}`);
+      toast(`${who} wurde gelöscht`);
+    }
+    renderAdmin();
+  } catch (err) { toast(err.message); }
+});
 function setOldPasswordNeeded(needed) {
   $('#oldPwLabel').hidden = !needed;
   $('#pwForm [name=oldPassword]').required = needed;

@@ -516,6 +516,43 @@ Geg. EC-Karte         7,67
   assert.equal(backend.users.get('frau@example.com').password, 'ganzneu123');
   assert.equal(await apiErr(frau, 'POST', '/api/password', { oldPassword: 'falsch', newPassword: 'nochmalneu1' }), 'Altes Passwort ist falsch.', 'danach wieder mit altem Passwort');
 
+  // ---------- 13. Besitzer sperrt, entsperrt und löscht ein Konto ----------
+  await fatih.click('[data-tab=account]');
+  await fatih.waitForFunction(() => document.querySelector('#adminList').textContent.includes('ayse@example.com'));
+  assert.equal(await fatih.$$eval('#adminList li', (lis) => lis.find((li) => li.textContent.includes('fatih@example.com')).querySelectorAll('[data-kick]').length), 0, 'sich selbst nicht');
+  const ayseBtn = (attr) => fatih.$eval('#adminList', (el, a) => [...el.querySelectorAll('li')].find((li) => li.textContent.includes('ayse@example.com')).querySelector(`[${a}]`).dataset[a === 'data-ban' ? 'ban' : 'kick'], attr);
+  const ayseId = await ayseBtn('data-ban');
+  fatih.once('dialog', (d) => d.accept());
+  await fatih.click(`[data-ban="${ayseId}"]`);
+  await fatih.waitForFunction(() => document.querySelector('#adminList').textContent.includes('gesperrt'));
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-18-sperren.png');
+  // gesperrt: Anmeldung geht nicht mehr
+  const ayse2 = await newPage('ayse2');
+  await ayse2.fill('#loginForm [name=email]', 'ayse@example.com');
+  await ayse2.fill('#loginForm [name=password]', 'geheim789');
+  await ayse2.click('#loginForm button[type=submit]');
+  await ayse2.waitForFunction(() => document.querySelector('#authError').textContent.includes('gesperrt'));
+  // entsperren: Anmeldung geht wieder
+  fatih.once('dialog', (d) => d.accept());
+  await fatih.click(`[data-ban="${ayseId}"]`);
+  await fatih.waitForFunction(() => !document.querySelector('#adminList').textContent.includes('gesperrt'));
+  await ayse2.click('#loginForm button[type=submit]');
+  await ayse2.waitForSelector('#app:not([hidden])');
+  // löschen: falscher Name -> nichts passiert; richtiger Name -> Konto weg
+  fatih.once('dialog', (d) => d.accept('Falsch'));
+  await fatih.click(`[data-kick="${ayseId}"]`);
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('nichts gelöscht'));
+  assert.ok(backend.users.has('ayse@example.com'));
+  let promptText = '';
+  fatih.once('dialog', (d) => { promptText = d.message(); d.accept('ayse'); });
+  await fatih.click(`[data-kick="${ayseId}"]`);
+  await fatih.waitForFunction(() => !document.querySelector('#adminList').textContent.includes('ayse@example.com'));
+  assert.match(promptText, /ENDGÜLTIG/);
+  assert.equal((await backend.pg.query('select count(*)::int n from auth.users where email = $1', ['ayse@example.com'])).rows[0].n, 0);
+  assert.equal((await backend.pg.query('select count(*)::int n from public.members m join public.households h on h.id = m.household_id where h.name = $1', ['Familie Kantarci'])).rows[0].n, 2, 'Familie bleibt');
+  assert.match(await fatih.textContent('#adminStats'), /Konten\s*2/);
+
   assert.deepEqual(errors, []);
   await browser.close();
   srv.close();

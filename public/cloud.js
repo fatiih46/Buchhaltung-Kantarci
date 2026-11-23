@@ -127,12 +127,14 @@
     weak_password: 'Das Passwort ist zu schwach.',
     over_email_send_rate_limit: 'Zu viele E-Mails verschickt. Bitte später erneut versuchen.',
     over_request_rate_limit: 'Zu viele Versuche. Bitte später erneut versuchen.',
+    user_banned: 'Dieses Konto wurde gesperrt. Bitte wende dich an den Besitzer der App.',
   };
   function authError(error) {
     if (!error) return null;
     const byText = /invalid login/i.test(error.message) ? 'invalid_credentials'
       : /not confirmed/i.test(error.message) ? 'email_not_confirmed'
-      : /already registered/i.test(error.message) ? 'user_already_exists' : null;
+      : /already registered/i.test(error.message) ? 'user_already_exists'
+      : /banned/i.test(error.message) ? 'user_banned' : null;
     const msg = AUTH_MESSAGES[error.code] || AUTH_MESSAGES[byText];
     if (msg) return new HttpError(400, msg);
     if (error.status === 0 || /fetch/i.test(error.message)) return offline();
@@ -301,6 +303,13 @@
     if (data && data.user) auth.meta = data.user.user_metadata || auth.meta;
     return { ok: true };
   }
+  // Sperren / Löschen: die Datenbank prüft selbst, dass nur der Besitzer das darf (und nicht sich selbst)
+  async function adminRpc(name, args) {
+    await requireAuth();
+    const { error } = await sb.rpc(name, args);
+    if (error) throw new HttpError(403, error.message || 'Nicht erlaubt.');
+    return { ok: true };
+  }
   async function adminUsers() {
     await requireAuth();
     const { data, error } = await sb.rpc('admin_overview');
@@ -373,6 +382,9 @@
     if (path === '/api/forgot' && method === 'POST') return forgotPassword(input);
     if (path === '/api/notice' && method === 'POST') return acceptNotice();
     if (path === '/api/admin/users') return adminUsers();
+    const adminUser = path.match(/^\/api\/admin\/users\/([0-9a-f-]{36})(\/ban)?$/);
+    if (adminUser && method === 'POST' && adminUser[2]) return adminRpc('admin_set_banned', { p_user: adminUser[1], p_banned: !!input.banned });
+    if (adminUser && method === 'DELETE' && !adminUser[2]) return adminRpc('admin_delete_user', { p_user: adminUser[1] });
     if (path === '/api/me') return me();
     await ensureData();
     if (path === '/api/household') return household(u.searchParams);

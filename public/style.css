@@ -411,3 +411,6 @@ dialog[open]::backdrop { animation: fade-in .16s ease-out; }
 }
 .update-bar .btn { background: var(--primary); color: var(--primary-text); border-color: var(--primary); white-space: nowrap; }
 .news-list { margin: 0 0 1rem; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .5rem; font-size: .95rem; }
+.admin-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .45rem; }
+.admin-row.banned .title, .admin-row.banned .meta { opacity: .6; }
+.pill.banned-pill { background: var(--danger-soft); color: var(--danger); }
