@@ -409,7 +409,9 @@ dialog[open]::backdrop { animation: fade-in .16s ease-out; }
   background: var(--text); color: var(--bg); padding: .6rem .6rem .6rem 1rem; border-radius: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.25);
   animation: fade-in .2s ease-out;
 }
-.update-bar .btn { background: var(--primary); color: var(--primary-text); border-color: var(--primary); white-space: nowrap; }
+.update-bar { font: inherit; border: 0; cursor: pointer; text-align: left; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+.update-bar .update-cta { background: var(--primary); color: var(--primary-text); border-radius: 10px; padding: .45rem .8rem; font-weight: 700; white-space: nowrap; }
+.update-bar:active { transform: translateX(-50%) scale(.98); }
 .news-list { margin: 0 0 1rem; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .5rem; font-size: .95rem; }
 .admin-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .45rem; }
 .admin-row.banned .title, .admin-row.banned .meta { opacity: .6; }
