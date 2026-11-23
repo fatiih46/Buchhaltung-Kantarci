@@ -548,7 +548,8 @@ async function renderAdmin() {
         <div class="title">${esc(r.name || '(noch nicht eingerichtet)')}${r.is_me ? ' <span class="pill">du</span>' : ''}${r.banned ? ' <span class="pill banned-pill">gesperrt</span>' : ''}</div>
         <div class="meta">${esc(r.email)}${r.confirmed ? '' : ' · <span class="neg">E-Mail nicht bestätigt</span>'}</div>
         <div class="meta">${r.household ? `🏠 ${esc(r.household)}${r.household_members > 1 ? ` (${r.household_members} Personen)` : ''} · ` : ''}registriert ${new Date(r.registered_at).toLocaleDateString('de-DE')}</div>
-        ${r.is_me ? '' : `<div class="admin-actions">
+        ${r.is_me ? '' : `<button type="button" class="manage-btn" data-manage aria-expanded="false">⋯ Verwalten</button>
+        <div class="admin-actions" hidden>
           <button type="button" class="btn small" data-ban="${r.user_id}" data-banned="${r.banned ? '1' : ''}">${r.banned ? '✅ Entsperren' : '🚫 Sperren'}</button>
           <button type="button" class="btn small danger-text" data-kick="${r.user_id}">🗑️ Löschen</button>
         </div>`}
@@ -561,6 +562,15 @@ $('#adminReload').addEventListener('click', renderAdmin);
 // Sperren / Entsperren / endgültig Löschen (immer mit Rückfrage)
 let adminRows = [];
 $('#adminList').addEventListener('click', async (e) => {
+  // Knöpfe erst nach „Verwalten“ zeigen, damit man nicht aus Versehen draufkommt
+  const manage = e.target.closest('[data-manage]');
+  if (manage) {
+    const box = manage.nextElementSibling;
+    box.hidden = !box.hidden;
+    manage.setAttribute('aria-expanded', String(!box.hidden));
+    manage.textContent = box.hidden ? '⋯ Verwalten' : '✕ Schließen';
+    return;
+  }
   const ban = e.target.closest('[data-ban]');
   const kick = e.target.closest('[data-kick]');
   if (!ban && !kick) return;

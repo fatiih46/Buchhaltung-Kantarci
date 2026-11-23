@@ -414,3 +414,4 @@ dialog[open]::backdrop { animation: fade-in .16s ease-out; }
 .admin-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .45rem; }
 .admin-row.banned .title, .admin-row.banned .meta { opacity: .6; }
 .pill.banned-pill { background: var(--danger-soft); color: var(--danger); }
+.manage-btn { margin-top: .4rem; font: inherit; font-size: .85rem; color: var(--muted); background: none; border: 1px dashed var(--line); border-radius: 8px; padding: .25rem .6rem; cursor: pointer; }
