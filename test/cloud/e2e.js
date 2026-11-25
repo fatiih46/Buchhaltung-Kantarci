@@ -11,7 +11,7 @@ const OUT = process.env.SCREENSHOTS || ''; // optional: Ordner für Bildschirmfo
 const PUB = path.join(REPO, 'public');
 const initSqlJs = require('sql.js');
 
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.pdf': 'application/pdf', '.css': 'text/css', '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
 function staticServer() {
   return http.createServer((req, res) => {
     let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -67,15 +67,17 @@ function staticServer() {
   await fatih.fill('#registerForm [name=householdName]', 'Familie Kantarci');
   await fatih.click('#registerForm button[type=submit]');
   await fatih.waitForSelector('#noticeDlg[open]');
-  assert.match(await fatih.textContent('#noticeDlg'), /eigene Verantwortung/);
+  assert.match(await fatih.textContent('#noticeDlg'), /eigene Gefahr[\s\S]*keine Haftung/i);
+  assert.equal(await fatih.isDisabled('#noticeOk'), true, 'ohne Häkchen nicht möglich');
   await fatih.waitForTimeout(300);
   await shot(fatih, 'cloud-14-hinweis.png');
   await fatih.click('#noticeCancel');
   assert.equal(backend.users.has('fatih@example.com'), false, 'Abbrechen legt kein Konto an');
   await fatih.click('#registerForm button[type=submit]');
+  await fatih.check('#noticeAccept');
   await fatih.click('#noticeOk');
   await fatih.waitForSelector('#app:not([hidden])');
-  assert.ok(backend.users.get('fatih@example.com').meta.accepted_notice, 'Bestätigung gespeichert');
+  assert.ok(backend.users.get('fatih@example.com').meta.accepted_terms_v2, 'Zustimmung gespeichert');
   assert.equal(await fatih.isVisible('#noticeDlg'), false, 'nach der Registrierung nicht noch einmal');
   const me = await api(fatih, 'GET', '/api/me');
   assert.equal(me.household.name, 'Familie Kantarci');
@@ -154,6 +156,7 @@ function staticServer() {
   await frau.fill('#registerForm [name=email]', 'frau@example.com');
   await frau.fill('#registerForm [name=password]', 'geheim456');
   await frau.click('#registerForm button[type=submit]');
+  await frau.check('#noticeAccept');
   await frau.click('#noticeOk');
   await frau.waitForSelector('#app:not([hidden])');
   assert.equal(new URL(frau.url()).search, '', 'Code aus der Adresse entfernt');
@@ -197,16 +200,25 @@ function staticServer() {
   await fatih.waitForTimeout(250);
   await shot(fatih, 'cloud-15-nutzer-uebersicht.png');
   await fatih.click('.topnav [data-tab=overview]');
-  // bestehendes Konto ohne Bestätigung: Hinweis erscheint einmal, „Verstanden“ wird gespeichert
-  backend.users.get('frau@example.com').meta.accepted_notice = null;
-  await frau.evaluate(() => { const s = JSON.parse(localStorage.getItem('fake-sb-session')); s.user.user_metadata.accepted_notice = null; localStorage.setItem('fake-sb-session', JSON.stringify(s)); Object.keys(localStorage).filter((k) => k.startsWith('hinweis-')).forEach((k) => localStorage.setItem(k, '0')); });
+  // bestehendes Konto ohne Zustimmung (neue Bedingungen): einmal akzeptieren – oder ablehnen und abmelden
+  const resetTerms = () => frau.evaluate(() => { const s = JSON.parse(localStorage.getItem('fake-sb-session')); s.user.user_metadata.accepted_terms_v2 = null; localStorage.setItem('fake-sb-session', JSON.stringify(s)); Object.keys(localStorage).filter((k) => k.startsWith('nutzungsbedingungen-')).forEach((k) => localStorage.setItem(k, '0')); });
+  backend.users.get('frau@example.com').meta.accepted_terms_v2 = null;
+  await resetTerms();
   await frau.reload();
   await frau.waitForSelector('#noticeDlg[open]');
-  assert.equal(await frau.isVisible('#noticeCancel'), false, 'bestehende Konten: nur „Verstanden“');
+  assert.match(await frau.textContent('#noticeCancel'), /Ablehnen und abmelden/);
+  await frau.click('#noticeCancel');
+  await frau.waitForSelector('#auth:not([hidden])');
+  assert.equal(backend.users.get('frau@example.com').meta.accepted_terms_v2, null, 'abgelehnt -> nicht gespeichert');
+  await frau.fill('#loginForm [name=email]', 'frau@example.com');
+  await frau.fill('#loginForm [name=password]', 'geheim456');
+  await frau.click('#loginForm button[type=submit]');
+  await frau.waitForSelector('#noticeDlg[open]');
+  await frau.check('#noticeAccept');
   await frau.click('#noticeOk');
   await frau.waitForFunction(() => !document.querySelector('#noticeDlg').open);
   await frau.waitForTimeout(300);
-  assert.ok(backend.users.get('frau@example.com').meta.accepted_notice, 'gespeichert');
+  assert.ok(backend.users.get('frau@example.com').meta.accepted_terms_v2, 'gespeichert');
   await frau.reload();
   await frau.waitForSelector('#app:not([hidden])');
   await frau.waitForTimeout(300);
@@ -321,6 +333,38 @@ ${dd}      17:12
   assert.equal((await api(fatih, 'GET', `/api/pots?month=${curYm}`)).totals.available, 400);
   await fatih.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
   await frau.evaluate(() => { state.month = '2026-11'; switchTab('overview'); });
+
+  // ---------- 6d2. PDF-Rechnung auswählen: Text wird aus der PDF gelesen, Budget „Tanken“ gewählt ----------
+  const pdfPage = await browser.newPage();
+  await pdfPage.setContent(`<body style="font-family:sans-serif;padding:40px">
+    <h2>Shell Deutschland GmbH</h2><p>Rechnung Nr. 4711<br>Rechnungsdatum: ${dd}</p>
+    <table><tr><td>Super E10 38,20 l</td><td>72,40 €</td></tr></table>
+    <p>Rechnungsbetrag inkl. MwSt. 72,40 €</p><p>enthaltene MwSt. 19 % 11,56 €</p></body>`);
+  const invoicePdf = await pdfPage.pdf({ format: 'A4' });
+  await pdfPage.close();
+  await fatih.evaluate((m) => { state.month = m; state.kosten = 'fix'; switchTab('kosten'); }, curYm);
+  await fatih.click('#fab');
+  const [ch3] = await Promise.all([fatih.waitForEvent('filechooser'), fatih.click('[data-qa=scanpick]')]);
+  assert.equal(await ch3.element().evaluate((el) => el.hasAttribute('capture')), false, 'Auswahl statt Kamera (Screenshots, PDFs)');
+  await ch3.setFiles({ name: 'rechnung.pdf', mimeType: 'application/pdf', buffer: invoicePdf });
+  await fatih.waitForFunction(() => /Erkannt|nichts sicher|nicht geklappt|nicht geladen/.test(document.querySelector('[data-scan-status]').textContent), null, { timeout: 60000 });
+  assert.match(await fatih.textContent('[data-scan-status]'), /Erkannt: Betrag, Geschäft, Datum/);
+  assert.equal(await fatih.inputValue('#dlgBody [name=amount]'), '72,40');
+  assert.equal(await fatih.inputValue('#dlgBody [name=shop]'), 'Shell');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=paid_from]').selectedOptions[0].textContent.includes('Tanken'));
+  assert.equal((await fatih.$$('#dlgBody [data-pending] .att-thumb')).length, 1, 'PDF als Beleg angehängt');
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-26-pdf-rechnung.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelector('#potList').textContent.includes('Shell'));
+  const tankPdf = (await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Tanken');
+  const shellEntry = tankPdf.entries.find((e) => e.shop === 'Shell');
+  assert.equal(shellEntry.amount, 72.4);
+  assert.equal(shellEntry.fileType, 'application/pdf');
+  fatih.once('dialog', (d) => d.accept());
+  await fatih.click(`#potList .del-btn[data-del="/api/pot-entries/${shellEntry.id}"]`);
+  await fatih.waitForFunction(() => !document.querySelector('#potList').textContent.includes('Shell'));
 
   // ---------- 6e. Kategorie aus freiem Text erkennen ----------
   await fatih.click('#fab');
@@ -453,12 +497,12 @@ ${dd}      17:12
   // ---------- 6f. Gegenseitig ansehen (Freigabe, nur lesen) ----------
   await frau.click('[data-tab=account]');
   await frau.waitForSelector('#shareCard:not([hidden])');
-  assert.equal(await frau.isChecked('#shareAll'), false);
+  assert.equal(await frau.isChecked('[name=shareLevel][value=none]'), true, 'anfangs privat');
   assert.equal(await frau.isVisible('#viewAs'), false, 'ohne Freigabe kein Umschalter');
   await fatih.click('[data-tab=account]');
   await fatih.waitForSelector('#shareCard:not([hidden])');
-  await fatih.check('#shareAll');
-  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('Freigegeben'));
+  await fatih.check('[name=shareLevel][value=view]');
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('Freigegeben zum Ansehen'));
   await frau.reload();
   await frau.waitForSelector('#app:not([hidden])');
   await frau.waitForSelector('#viewAs:not([hidden])');
@@ -482,8 +526,64 @@ ${dd}      17:12
   await frau.waitForSelector('#viewBanner', { state: 'hidden' });
   assert.equal(await frau.isVisible('#fab'), true);
   assert.ok(!(await api(frau, 'GET', '/api/entries?month=2026-11')).some((e) => e.shop === 'Lidl'), 'wieder eigene Daten');
-  // Freigabe zurücknehmen
-  await fatih.uncheck('#shareAll');
+  // ---------- 6g. Ändern erlauben: Fatih schaltet es ein, seine Frau trägt bei ihm ein; dann wieder aus ----------
+  fatih.once('dialog', (d) => d.dismiss());
+  await fatih.click('[name=shareLevel][value=edit]');
+  await fatih.waitForTimeout(200);
+  assert.equal(await fatih.isChecked('[name=shareLevel][value=view]'), true, 'Abbrechen lässt alles beim Alten');
+  fatih.once('dialog', (d) => d.accept());
+  await fatih.check('[name=shareLevel][value=edit]');
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('Ansehen und Ändern'));
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-27-freigabe-stufen.png');
+  await frau.reload();
+  await frau.waitForSelector('#app:not([hidden])');
+  await frau.selectOption('#viewAs', { label: '✏️ Fatih' });
+  await frau.waitForSelector('#viewBanner:not([hidden])');
+  assert.match(await frau.textContent('#viewBanner'), /bearbeitest die Einträge von Fatih/);
+  await frau.evaluate(() => { state.month = '2026-11'; state.kosten = 'variabel'; switchTab('kosten'); });
+  await frau.waitForFunction(() => document.querySelector('#entryList').textContent.includes('Lidl'));
+  assert.equal(await frau.isVisible('#fab'), true, '＋ beim Ändern erlaubt');
+  await frau.click('#entryList li[data-id]');
+  await frau.waitForSelector('#dlg[open]');
+  assert.doesNotMatch(await frau.textContent('#dlgTitle'), /nur ansehen/);
+  assert.equal(await frau.isDisabled('#dlgBody [name=amount]'), false);
+  await frau.click('#dlgCancel');
+  await api(frau, 'POST', '/api/entries', { kind: 'mehr', date: '2026-11-06', category: 'Sonstiges', amount: '7,50', shop: 'Von meiner Frau eingetragen' });
+  const forFatih = (await api(frau, 'GET', '/api/entries?month=2026-11')).find((e) => e.shop === 'Von meiner Frau eingetragen');
+  assert.ok(forFatih, 'Eintrag in Fatihs Daten');
+  await frau.evaluate(async ([id, b64]) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    await Cloud.upload('entry', id, new File([bytes], 'beleg.png', { type: 'image/png' }));
+  }, [forFatih.id, png]);
+  await frau.evaluate(() => render());
+  await frau.waitForFunction(() => document.querySelector('#entryList').textContent.includes('Von meiner Frau eingetragen'));
+  await frau.waitForTimeout(250);
+  await shot(frau, 'cloud-28-partner-bearbeiten.png');
+  {
+    const fdb = (await userDb('fatih@example.com')).db;
+    const row = fdb.exec("SELECT e.id, a.file_path FROM entries e LEFT JOIN attachments a ON a.owner_id = e.id AND a.owner_type = 'entry' WHERE e.shop = 'Von meiner Frau eingetragen'")[0];
+    assert.ok(row, 'in der Cloud bei Fatih gespeichert');
+    assert.ok(String(row.values[0][1]).startsWith(backend.users.get('fatih@example.com').id + '/'), 'Beleg liegt in Fatihs Ordner');
+  }
+  await fatih.reload();
+  await fatih.waitForSelector('#app:not([hidden])');
+  assert.ok((await api(fatih, 'GET', '/api/entries?month=2026-11')).some((e) => e.shop === 'Von meiner Frau eingetragen'), 'Fatih sieht den Eintrag');
+  // Fatih nimmt das Ändern zurück (nur noch ansehen) – seine Frau ist noch in seiner Ansicht
+  await fatih.click('[data-tab=account]');
+  await fatih.check('[name=shareLevel][value=view]');
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('nicht ändern'));
+  assert.match(await apiErr(frau, 'DELETE', `/api/entries/${forFatih.id}`), /Ändern ausgeschaltet/);
+  await frau.waitForFunction(() => document.body.classList.contains('readonly'));
+  assert.match(await frau.textContent('#viewBanner'), /nur ansehen/);
+  assert.equal(await frau.isVisible('#fab'), false);
+  await api(fatih, 'DELETE', `/api/entries/${forFatih.id}`);
+  await frau.click('#viewBack');
+  await frau.waitForSelector('#viewBanner', { state: 'hidden' });
+  assert.equal(await frau.evaluate(() => document.body.classList.contains('editing-other') || document.body.classList.contains('readonly')), false);
+
+  // Freigabe ganz zurücknehmen
+  await fatih.check('[name=shareLevel][value=none]');
   await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('ausgeschaltet'));
   await frau.reload();
   await frau.waitForSelector('#app:not([hidden])');
@@ -742,6 +842,7 @@ Geg. EC-Karte         7,67
   await neu.check('#registerForm input[value=join]');
   await neu.fill('#registerForm [name=inviteCode]', 'FALSCH22');
   await neu.click('#registerForm button[type=submit]');
+  await neu.check('#noticeAccept');
   await neu.click('#noticeOk');
   await neu.waitForFunction(() => document.querySelector('#authError').textContent.includes('Einladungscode'));
   await neu.fill('#registerForm [name=inviteCode]', me.household.inviteCode.toLowerCase());

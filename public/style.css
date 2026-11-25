@@ -451,3 +451,16 @@ body.readonly #kasseBox, body.readonly .quick { display: none !important; }
 .pot-entries li.korrektur .title { font-weight: 500; }
 body.readonly .pot-actions { display: none !important; }
 .pot-entries li.carry { background: var(--primary-soft); border-radius: 8px; padding-left: .5rem; padding-right: .5rem; }
+.notice-accept { margin: 0 0 .8rem; padding: .6rem .7rem; background: var(--primary-soft); border-radius: 10px; font-size: .9rem; align-items: flex-start; }
+.notice-accept input { margin-top: .2rem; }
+#noticeOk:disabled { opacity: .45; cursor: not-allowed; }
+.scan-row { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.scan-row .scan-btn { justify-content: center; text-align: center; font-size: .9rem; padding: .7rem .4rem; }
+.scan-btn.alt { background: var(--card); color: var(--primary); border: 1px solid var(--primary); }
+.sheet .scan-row { margin-bottom: .6rem; }
+.sheet .scan-row .scan-btn { margin-bottom: 0; font-size: .92rem; }
+.share-levels { display: grid; gap: .35rem; margin: .4rem 0 .6rem; }
+.share-levels .check { align-items: center; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 10px; margin: 0; }
+.share-levels .check:has(input:checked) { border-color: var(--primary); }
+body.editing-other .view-banner { background: #e3f2ff; color: #0b4a7a; }
+@media (prefers-color-scheme: dark) { body.editing-other .view-banner { background: #12324d; color: #bfe0ff; } }

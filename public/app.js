@@ -113,7 +113,7 @@ $('#registerForm').addEventListener('submit', async (e) => {
   const f = new FormData(e.target);
   const join = f.get('mode') === 'join';
   // vor dem Anlegen des Kontos: Hinweis zur Nutzung bestätigen
-  if (!noticeOkInSession && !(await showNotice({ confirmText: 'Verstanden – Konto erstellen', cancel: true }))) return;
+  if (!noticeOkInSession && !(await showNotice({ confirmText: 'Akzeptieren – Konto erstellen', cancel: true }))) return;
   noticeOkInSession = true;
   try {
     await api('POST', '/api/register', {
@@ -198,20 +198,26 @@ async function showNewsOnce({ skip = false } = {}) {
 // ---------- Hinweis zur Nutzung ----------
 let noticeJustAccepted = false;
 let noticeOkInSession = false; // bei mehreren Versuchen (z. B. Tippfehler im Code) nicht jedes Mal fragen
-function showNotice({ confirmText = 'Verstanden', cancel = false } = {}) {
+// readOnly: nur zum Nachlesen (ohne Häkchen); sonst muss das Häkchen gesetzt werden
+function showNotice({ confirmText = 'Akzeptieren', cancel = false, cancelText = 'Abbrechen', readOnly = false } = {}) {
   const d = $('#noticeDlg');
-  $('#noticeOk').textContent = confirmText;
+  $('#noticeOk').textContent = readOnly ? 'Schließen' : confirmText;
+  $('#noticeCancel').textContent = cancelText;
   $('#noticeCancel').hidden = !cancel;
+  $('.notice-accept', d).hidden = readOnly;
+  $('#noticeAccept').checked = false;
+  $('#noticeOk').disabled = !readOnly;
+  $('#noticeAccept').onchange = () => { $('#noticeOk').disabled = !$('#noticeAccept').checked; };
   d.showModal();
   $('.notice-text', d).scrollTop = 0;
   return new Promise((resolve) => {
     const done = (ok) => { d.close(); $('#noticeOk').onclick = $('#noticeCancel').onclick = d.oncancel = null; resolve(ok); };
     $('#noticeOk').onclick = () => done(true);
     $('#noticeCancel').onclick = () => done(false);
-    d.oncancel = (e) => { e.preventDefault(); if (cancel) done(false); }; // ohne „Abbrechen“ nur mit „Verstanden“ schließen
+    d.oncancel = (e) => { e.preventDefault(); if (cancel || readOnly) done(readOnly); }; // sonst nur über die Knöpfe
   });
 }
-const noticeKey = () => `hinweis-gelesen-${state.me.user.id}`;
+const noticeKey = () => `nutzungsbedingungen-v2-${state.me.user.id}`;
 function noticeSeen() {
   if (state.me.noticeAccepted) return true;
   try { return localStorage.getItem(noticeKey()) === '1'; } catch { return false; }
@@ -220,7 +226,7 @@ async function rememberNotice() {
   try { localStorage.setItem(noticeKey(), '1'); } catch { /* privates Fenster */ }
   if (window.Cloud?.enabled) await api('POST', '/api/notice').catch(() => {});
 }
-$('#showNotice').addEventListener('click', () => showNotice());
+$('#showNotice').addEventListener('click', () => showNotice({ readOnly: true }));
 
 function authMessage(err) {
   $('#authError').textContent = err.message;
@@ -262,7 +268,13 @@ async function boot() {
   setupViewSwitch();
   // bestehende Konten: Hinweis einmal anzeigen; danach (oder sonst) einmal „Neu in dieser Version“
   if (noticeJustAccepted) { noticeJustAccepted = false; rememberNotice(); showNewsOnce({ skip: true }); }
-  else if (!noticeSeen()) showNotice().then(rememberNotice).then(() => showNewsOnce());
+  else if (!noticeSeen()) {
+    showNotice({ cancel: true, cancelText: 'Ablehnen und abmelden' }).then(async (ok) => {
+      if (!ok) { $('#logout').click(); return; }
+      await rememberNotice();
+      showNewsOnce();
+    });
+  }
   else showNewsOnce();
   checkForUpdate();
   if (window.Cloud?.recovery) {
@@ -725,31 +737,62 @@ function setupViewSwitch() {
   sel.hidden = !window.Cloud?.enabled || !others.length;
   $('#hello').hidden = !sel.hidden;
   sel.innerHTML = `<option value="">👤 ${esc(state.me.user.name)} (meine Daten)</option>` +
-    others.map((m) => `<option value="${m.id}">👀 ${esc(m.name)}</option>`).join('');
+    others.map((m) => `<option value="${m.id}">${m.shareEdit ? '✏️' : '👀'} ${esc(m.name)}</option>`).join('');
   sel.value = state.viewing?.id || '';
 }
 async function switchView(id) {
   const m = (state.me.members || []).find((x) => x.id === id);
-  try { await Cloud.setView(m ? m.id : null, m ? m.name : null); } catch (err) { toast(err.message); $('#viewAs').value = ''; return; }
-  state.viewing = m || null;
-  document.body.classList.toggle('readonly', !!m);
-  $('#viewBanner').hidden = !m;
-  $('#viewName').textContent = m ? m.name : '';
+  let res;
+  try { res = await Cloud.setView(m ? m.id : null, m ? m.name : null); } catch (err) { toast(err.message); $('#viewAs').value = ''; return; }
+  state.viewing = m ? { ...m, canEdit: !!res?.canEdit } : null;
   $('#viewAs').value = m ? m.id : '';
+  applyViewMode();
   render();
 }
+// Ansehen = alles gesperrt; mit Erlaubnis zum Ändern = normal bedienbar, nur mit Hinweis oben
+function applyViewMode() {
+  const v = state.viewing;
+  document.body.classList.toggle('readonly', !!v && !v.canEdit);
+  document.body.classList.toggle('editing-other', !!v?.canEdit);
+  $('#viewBanner').hidden = !v;
+  $('#viewName').textContent = v ? v.name : '';
+  $('#viewLead').textContent = v?.canEdit ? '✏️ Du bearbeitest die Einträge von ' : '👀 Einträge von ';
+  $('#viewMode').textContent = v?.canEdit ? 'Änderungen werden dort gespeichert' : 'nur ansehen';
+}
+window.addEventListener('haushalt:viewlocked', () => {
+  if (!state.viewing) return;
+  state.viewing.canEdit = false;
+  applyViewMode();
+  render();
+});
 $('#viewAs').addEventListener('change', (e) => switchView(e.target.value));
 $('#viewBack').addEventListener('click', () => switchView(''));
-$('#shareAll').addEventListener('change', async (e) => {
+const SHARE_TOAST = {
+  none: 'Freigabe ausgeschaltet – deine Einträge sind wieder privat',
+  view: 'Freigegeben zum Ansehen – die anderen im Haushalt können deine Einträge sehen, aber nicht ändern',
+  edit: 'Freigegeben zum Ansehen und Ändern – die anderen im Haushalt dürfen deine Einträge jetzt auch bearbeiten',
+};
+const myShareLevel = () => {
+  const me = (state.me.members || []).find((m) => m.id === state.me.user.id);
+  return me?.shareEdit ? 'edit' : me?.shareAll ? 'view' : 'none';
+};
+$$('[name=shareLevel]').forEach((r) => r.addEventListener('change', async (e) => {
+  const level = e.target.value;
+  if (level === 'edit' && !confirm('Wirklich erlauben, dass die anderen in eurem Haushalt deine Einträge ändern und löschen dürfen?\n\nDu kannst das jederzeit wieder ausschalten.')) {
+    $(`[name=shareLevel][value=${myShareLevel()}]`).checked = true;
+    return;
+  }
   try {
-    await api('POST', '/api/share', { share: e.target.checked });
-    toast(e.target.checked ? 'Freigegeben – die anderen im Haushalt können deine Einträge jetzt ansehen' : 'Freigabe ausgeschaltet');
-  } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
-});
+    await api('POST', '/api/share', { level });
+    const me = state.me.members.find((m) => m.id === state.me.user.id);
+    if (me) { me.shareAll = level !== 'none'; me.shareEdit = level === 'edit'; }
+    toast(SHARE_TOAST[level]);
+  } catch (err) { $(`[name=shareLevel][value=${myShareLevel()}]`).checked = true; toast(err.message); }
+}));
 
 function renderAccount() {
   $('#shareCard').hidden = !window.Cloud?.enabled || (state.me.members || []).length < 2;
-  $('#shareAll').checked = !!(state.me.members || []).find((m) => m.id === state.me.user.id)?.shareAll;
+  $(`[name=shareLevel][value=${myShareLevel()}]`).checked = true;
   $('#accountInfo').textContent = `${state.me.user.name} · ${state.me.user.email} · Haushalt „${state.me.household.name}“ (${state.me.members.map((m) => m.name).join(', ')})`;
   $('#adminCard').hidden = !state.me.isAdmin;
   if (state.me.isAdmin) renderAdmin();
@@ -848,6 +891,7 @@ $('#pwForm').addEventListener('submit', async (e) => {
 // ---------- „＋“ unten rechts: Schnell eintragen ----------
 const QUICK = {
   scan: () => $('#scanInput').click(),
+  scanpick: () => $('#scanPick').click(),
   ausgabe: () => openEntryDialog({ kind: 'mehr' }),
   einnahme: () => openEntryDialog({ kind: 'weniger' }),
   fix: () => openFixedDialog(),
@@ -863,13 +907,13 @@ const QUICK = {
   geburtstag: () => openBirthdayDialog(),
 };
 $('#fab').addEventListener('click', () => $('#quickDlg').showModal());
-$('#scanInput').addEventListener('change', (e) => {
+['#scanInput', '#scanPick'].forEach((sel) => $(sel).addEventListener('change', (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
   openEntryDialog({ kind: 'mehr' });
   scanInto($('#dlgBody'), file);
-});
+}));
 $('#quickClose').addEventListener('click', () => $('#quickDlg').close());
 $('#quickDlg').addEventListener('click', (e) => {
   if (e.target === $('#quickDlg')) { $('#quickDlg').close(); return; } // Tipp neben das Menü schließt es
@@ -898,7 +942,7 @@ $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
   state.tab = 'overview';
   state.viewing = null;
-  document.body.classList.remove('readonly');
+  document.body.classList.remove('readonly', 'editing-other');
   $('#viewBanner').hidden = true;
   showAuth();
 });
@@ -919,7 +963,7 @@ function openDialog({ title, html, onSave, onDelete, onOpen }) {
   $('#dlgError').textContent = '';
   $('#dlgDelete').hidden = !onDelete;
   // Einträge des Partners: nur ansehen
-  const ro = !!state.viewing;
+  const ro = !!state.viewing && !state.viewing.canEdit;
   $('#dlgForm button[type=submit]').hidden = ro;
   $('#dlgCancel').textContent = ro ? 'Schließen' : 'Abbrechen';
   if (ro) {
@@ -1086,8 +1130,11 @@ function openEntryDialog(item = {}) {
     title: isEdit ? 'Eintrag bearbeiten' : (kind === 'mehr' ? 'Neue Ausgabe' : 'Einnahme / Erstattung'),
     html: `
       ${isEdit ? '' : `<div class="scan-box">
-        <label class="btn scan-btn">📷 Kassenbon scannen<input type="file" accept="image/*" capture="environment" data-scan hidden></label>
-        <div class="muted small" data-scan-status>Betrag, Geschäft und Datum werden automatisch eingetragen – du prüfst und speicherst.</div>
+        <div class="scan-row">
+          <label class="btn scan-btn">📷 Kassenbon fotografieren<input type="file" accept="image/*" capture="environment" data-scan hidden></label>
+          <label class="btn scan-btn alt">🖼️ Screenshot / PDF<input type="file" accept="image/*,application/pdf" data-scan hidden></label>
+        </div>
+        <div class="muted small" data-scan-status>Foto, Screenshot oder PDF-Rechnung: Betrag, Geschäft, Datum und Budget werden automatisch eingetragen – du prüfst und speicherst.</div>
       </div>`}
       ${withPots ? `<label data-paid-from hidden>Bezahlt aus
         <select name="paid_from"><option value="">👤 Meinem eigenen Geld</option></select></label>` : ''}
@@ -1142,11 +1189,11 @@ function openEntryDialog(item = {}) {
           pickPot(body.lastScan); // falls der Scan schon fertig war
         }).catch(() => {});
       }
-      $('[data-scan]', body)?.addEventListener('change', (e) => {
+      $$('[data-scan]', body).forEach((inp) => inp.addEventListener('change', (e) => {
         const file = e.target.files[0];
         e.target.value = '';
         if (file) scanInto(body, file);
-      });
+      }));
     },
     onSave: async (d) => {
       if (isEdit) return api('PUT', `/api/entries/${item.id}`, d);
@@ -1200,11 +1247,47 @@ async function ocrImage(file) {
     return c;
   } catch { return file; }
 }
+// PDF-Rechnung: Text direkt aus der Datei lesen (genauer als ein Foto); eingescannte PDFs: erste Seite als Bild erkennen
+let pdfjsLib = null;
+async function readPdf(file) {
+  if (!pdfjsLib) {
+    pdfjsLib = await import(new URL('vendor/pdfjs/pdf.min.mjs', location.href).href);
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('vendor/pdfjs/pdf.worker.min.mjs', location.href).href;
+  }
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  let text = '';
+  for (let n = 1; n <= Math.min(doc.numPages, 3); n++) {
+    const page = await doc.getPage(n);
+    const content = await page.getTextContent();
+    // Textstücke zu Zeilen zusammensetzen (gleiche Höhe = gleiche Zeile)
+    let line = '', lastY = null;
+    for (const it of content.items) {
+      const y = Math.round(it.transform[5]);
+      if (lastY !== null && Math.abs(y - lastY) > 2) { text += line.trim() + '\n'; line = ''; }
+      line += (line && !line.endsWith(' ') ? ' ' : '') + it.str;
+      lastY = y;
+    }
+    text += line.trim() + '\n';
+  }
+  if (text.replace(/\s/g, '').length >= 20) return { text };
+  const page = await doc.getPage(1);
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width; canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  return { canvas };
+}
 async function readReceipt(file, onProgress) {
   ocrProgress = onProgress;
   try {
+    let image = null;
+    if (file.type === 'application/pdf') {
+      const pdf = await readPdf(file);
+      if (pdf.text) return HaushaltReceipt.parseReceipt(pdf.text);
+      image = pdf.canvas;
+    }
     const worker = await getOcrWorker();
-    const { data } = await worker.recognize(await ocrImage(file));
+    const { data } = await worker.recognize(image || await ocrImage(file));
     return HaushaltReceipt.parseReceipt(data.text);
   } finally { ocrProgress = null; }
 }
@@ -1215,7 +1298,7 @@ async function scanInto(root, file) {
   pendingFiles.push(file);
   $('.att-pick', root)?.redraw?.();
   status.className = 'small scan-status busy';
-  status.textContent = 'Kassenbon wird gelesen … (beim ersten Mal dauert es etwas länger)';
+  status.textContent = file.type === 'application/pdf' ? 'Rechnung wird gelesen …' : 'Kassenbon wird gelesen … (beim ersten Mal dauert es etwas länger)';
   let r;
   try {
     r = await readReceipt(file, (p) => { if (root.isConnected) status.textContent = `Kassenbon wird gelesen … ${p} %`; });

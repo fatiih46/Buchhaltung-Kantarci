@@ -49,15 +49,29 @@
     [/\bdeichmann\b/i, 'Deichmann', 'Kleidung & Shopping'],
     [/\bc\s*&\s*a\b/i, 'C&A', 'Kleidung & Shopping'],
     [/media\s*markt/i, 'MediaMarkt', 'Sonstiges'],
+    // häufige Rechnungen / Online-Händler
+    [/\bamazon\b/i, 'Amazon', 'Sonstiges'],
+    [/\bzalando\b/i, 'Zalando', 'Kleidung & Shopping'],
+    [/\botto\s*(gmbh|\.de|versand)/i, 'OTTO', 'Sonstiges'],
+    [/\bebay\b/i, 'eBay', 'Sonstiges'],
+    [/\btelekom\b/i, 'Telekom', 'Handy, Internet & Abos'],
+    [/\bvodafone\b/i, 'Vodafone', 'Handy, Internet & Abos'],
+    [/\bo2\b|telef[oó]nica/i, 'O2', 'Handy, Internet & Abos'],
+    [/\bnetflix\b/i, 'Netflix', 'Handy, Internet & Abos'],
+    [/\bspotify\b/i, 'Spotify', 'Handy, Internet & Abos'],
+    [/stadtwerke|\be\.?on\b|vattenfall|\benbw\b|\brwe\b/i, 'Energieversorger', 'Nebenkosten & Energie'],
     [/\bsaturn\b/i, 'Saturn', 'Sonstiges'],
   ];
 
   // Zeilen mit dem zu zahlenden Betrag (nach Wichtigkeit) und Zeilen, die NICHT der Endbetrag sind
   const TOTAL_WORDS = [
-    /zu\s*zahlen/i, /gesamt\s*betrag|gesamtsumme|endbetrag/i, /\bsumme\b|\bsumme\s*eur/i, /\bgesamt\b/i,
+    /zu\s*zahlen/i, /gesamt\s*betrag|gesamtsumme|endbetrag|rechnungsbetrag|endsumme|zahlbetrag|summe\s*brutto|bruttobetrag/i,
+    /\bsumme\b|\bsumme\s*eur/i, /\bgesamt\b/i,
     /\btotal\b/i, /\bbetrag\b/i, /\b(ec[\s-]*karte|kartenzahlung|girocard|visa|mastercard|bar)\b/i,
   ];
-  const NOT_TOTAL = /(mwst|ust\b|steuer|netto|brutto\s*netto|r[üu]ckgeld|gegeben|wechselgeld|rabatt|ersparnis|gespart|pfand|punkte|zwischensumme)/i;
+  const NOT_TOTAL_RE = /(mwst|ust\b|steuer|netto|brutto\s*netto|r[üu]ckgeld|gegeben|wechselgeld|rabatt|ersparnis|gespart|pfand|punkte|zwischensumme)/i;
+  // „Gesamtbetrag inkl. MwSt.“ ist der Endbetrag einer Rechnung – „inkl./zzgl. MwSt.“ allein macht keine Steuerzeile
+  const NOT_TOTAL = { test: (l) => NOT_TOTAL_RE.test(l.replace(/(inkl|incl|einschl|zzgl)\.?\s*(\d+\s*%\s*)?(der\s*)?(gesetzl\.?\s*)?(mwst|ust|ust\.|umsatzsteuer|mehrwertsteuer)\.?/gi, '')) };
 
   // Beträge in einer Zeile: 12,99  1.234,50  12.99  (nicht Datum/Uhrzeit)
   const AMOUNT_RE = /(?<![\d.,])(\d{1,3}(?:[.\s]\d{3})*|\d+)[.,](\d{2})(?![\d.,]|\s*%)/g;

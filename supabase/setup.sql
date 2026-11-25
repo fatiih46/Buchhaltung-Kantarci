@@ -385,3 +385,50 @@ alter table public.pot_entries add constraint pot_entries_korrektur_check
 -- keywords: Stichwörter (von Hand oder von der App gelernt), damit Ausgaben automatisch im richtigen Topf landen
 alter table public.pots add column if not exists created_by uuid references auth.users (id) on delete set null default auth.uid();
 alter table public.pots add column if not exists keywords jsonb not null default '[]'::jsonb;
+
+-- ---------- Partner darf meine Einträge auch ÄNDERN (nur wenn ich es unter ⚙ erlaube) ----------
+-- Stufen: nichts freigeben / ansehen (share_all) / ansehen und ändern (share_all + share_edit).
+-- Jede Person entscheidet nur über ihre eigenen Daten und kann es jederzeit wieder ausschalten.
+alter table public.members add column if not exists share_edit boolean not null default false;
+
+create or replace function public.set_share(p_level text)
+returns void language sql volatile security definer set search_path = public as $$
+  update public.members
+     set share_all = coalesce(p_level, 'none') in ('view', 'edit'),
+         share_edit = coalesce(p_level, 'none') = 'edit'
+   where user_id = auth.uid()
+$$;
+-- ältere App-Version: „nicht freigeben“ nimmt auch das Ändern zurück
+create or replace function public.set_share_all(p_share boolean)
+returns void language sql volatile security definer set search_path = public as $$
+  update public.members set share_all = coalesce(p_share, false),
+    share_edit = case when coalesce(p_share, false) then share_edit else false end
+   where user_id = auth.uid()
+$$;
+
+create or replace function public.shares_edit_with_me(p_user text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.members m
+    where m.user_id::text = p_user and m.share_all and m.share_edit and m.user_id <> auth.uid()
+      and m.household_id = public.my_household())
+$$;
+
+drop policy if exists "user_data_update_shared" on public.user_data;
+create policy "user_data_update_shared" on public.user_data for update to authenticated
+  using (public.shares_edit_with_me(user_id::text)) with check (public.shares_edit_with_me(user_id::text));
+
+drop policy if exists "summaries_update_shared" on public.summaries;
+create policy "summaries_update_shared" on public.summaries for update to authenticated
+  using (public.shares_edit_with_me(user_id::text)) with check (public.shares_edit_with_me(user_id::text));
+
+drop policy if exists "belege_insert_shared" on storage.objects;
+drop policy if exists "belege_delete_shared" on storage.objects;
+create policy "belege_insert_shared" on storage.objects for insert to authenticated
+  with check (bucket_id = 'belege' and public.shares_edit_with_me((storage.foldername(name))[1]));
+create policy "belege_delete_shared" on storage.objects for delete to authenticated
+  using (bucket_id = 'belege' and public.shares_edit_with_me((storage.foldername(name))[1]));
+
+revoke all on function public.set_share(text) from public, anon;
+revoke all on function public.shares_edit_with_me(text) from public, anon;
+grant execute on function public.set_share(text) to authenticated;
+grant execute on function public.shares_edit_with_me(text) to authenticated;

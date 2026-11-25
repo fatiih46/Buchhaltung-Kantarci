@@ -110,3 +110,25 @@ test('Einzelne Waren und Anlagen erkennen; Wörter zum Lernen', () => {
   assert.deepEqual(significantWords('Mayonnaise und Ketchup bei Lidl gekauft, 2 Stück'), ['mayonnaise', 'ketchup', 'lidl']);
   assert.deepEqual(significantWords('Öl für die Brötchen'), ['broetchen'], 'Umlaute vereinheitlicht, kurze Wörter weg');
 });
+
+test('Rechnungen (PDF-Text): Gesamtbetrag inkl. MwSt., Händler, Rechnungsdatum', () => {
+  const r = parseReceipt(`
+Amazon EU S.à r.l., Niederlassung Deutschland
+Rechnung
+Rechnungsdatum 12.11.2026
+Bestellnummer 302-1234567-1234567
+Ladekabel USB-C 1 9,99 €
+Handyhülle 1 14,00 €
+Zwischensumme (ohne MwSt.) 20,16 €
+MwSt. 19 % 3,83 €
+Gesamtbetrag inkl. MwSt. 23,99 €`, TODAY);
+  assert.deepEqual(r, { amount: 23.99, date: '2026-11-12', shop: 'Amazon', category: 'Sonstiges' });
+  const t = parseReceipt(`Telekom Deutschland GmbH
+Ihre Rechnung für November 2026
+Rechnungsdatum: 03.11.2026
+Rechnungsbetrag 39,95 €
+darin enthaltene USt. 19 % 6,38 €`, TODAY);
+  assert.equal(t.amount, 39.95);
+  assert.equal(t.category, 'Handy, Internet & Abos');
+  assert.equal(parseReceipt('MwSt 19% 3,83\nSumme 23,99', TODAY).amount, 23.99, 'reine Steuerzeile zählt nicht');
+});

@@ -1,6 +1,8 @@
 {
-  "version": "2026.11.25",
+  "version": "2026.11.26",
   "notes": [
-    "↪️ Übertrag gut sichtbar: In jedem gemeinsamen Budget steht oben „Übertrag aus (Vormonat)“ mit dem übernommenen Rest bzw. der Überschreitung."
+    "🖼️ Screenshots und PDF-Rechnungen scannen: Betrag, Geschäft und Datum werden erkannt, das passende Budget (z. B. Tanken) gewählt und abgezogen.",
+    "✏️ Freigabe in drei Stufen unter ⚙: privat, nur ansehen oder ansehen und ändern – jederzeit umschaltbar, jede Person für ihre eigenen Daten.",
+    "⚠️ Nutzungsbedingungen: Nutzung auf eigene Gefahr, ohne Haftung – einmal bestätigen."
   ]
 }
