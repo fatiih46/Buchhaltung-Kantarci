@@ -18,6 +18,11 @@ Eine kleine Web-App für zwei (oder mehr) Personen in einem Haushalt:
   die Kategorie. Die App **lernt** aus bestätigten Zuordnungen („Mayonnaise“ einmal → „Ladenausgabe“, danach automatisch);
   jeder Topf zeigt, wer ihn angelegt hat.
 - **Kategorie aus Text** – „Auto heile machen“ → Auto & Verschleiß (Wort-Erkennung auf dem Gerät, `public/receipt.js`).
+- **🎤 Sprachassistent** – ＋ → „🎤 Einfach sagen“: „120 € bei Tanken“, „Füge bei Sparen 200 ein“, „Gestern 45,90 bei Rewe
+  und 20 € Döner“, „Lege ein Budget Urlaub mit 300 € an“, „Wie viel ist noch bei Tanken?“. Gesprochen wird über das 🎤 der
+  iPhone-Tastatur (oder „Jetzt sprechen“, wo der Browser Spracherkennung hat). Der Satz wird **auf dem Gerät** verstanden
+  (`parseCommand` in `public/receipt.js`, keine KI-Cloud, kostenlos); vor dem Speichern zeigt die App, was sie verstanden hat
+  und wohin es geht (Budget oder eigene Kategorie) – man bestätigt oder ändert. Bestätigte Zuordnungen werden gelernt.
 - **Freigabe in drei Stufen** – unter ⚙ entscheidet jede Person selbst über ihre Einträge und Belege: 🔒 privat,
   👀 nur ansehen oder ✏️ ansehen und ändern. Oben unter dem Namen umschalten; beim Bearbeiten zeigt ein blauer Hinweis,
   wessen Daten man gerade ändert. Zurücknehmen gilt sofort (die Datenbank prüft die Erlaubnis selbst, `share_edit`).

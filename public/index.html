@@ -6,7 +6,7 @@
   <title>Haushaltsbuch</title>
   <meta name="theme-color" content="#1f6f5c">
   <!-- muss mit public/version.json übereinstimmen (wird getestet) -->
-  <meta name="app-version" content="2026.11.26">
+  <meta name="app-version" content="2026.11.27">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -322,6 +322,7 @@
   <!-- Schnell eintragen -->
   <dialog id="quickDlg" class="sheet" aria-labelledby="quickTitle">
     <h2 id="quickTitle">Was möchtest du eintragen?</h2>
+    <button type="button" class="btn voice-btn wide" data-qa="voice">🎤 Einfach sagen <small>z. B. „120 € bei Tanken“</small></button>
     <div class="scan-row">
       <button type="button" class="btn scan-btn" data-qa="scan">📷 Kassenbon fotografieren</button>
       <button type="button" class="btn scan-btn alt" data-qa="scanpick">🖼️ Screenshot / Rechnung (PDF)</button>

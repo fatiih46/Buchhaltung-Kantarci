@@ -464,3 +464,19 @@ body.readonly .pot-actions { display: none !important; }
 .share-levels .check:has(input:checked) { border-color: var(--primary); }
 body.editing-other .view-banner { background: #e3f2ff; color: #0b4a7a; }
 @media (prefers-color-scheme: dark) { body.editing-other .view-banner { background: #12324d; color: #bfe0ff; } }
+/* Sprachassistent */
+.voice-btn { display: flex; flex-direction: column; align-items: center; gap: .1rem; margin-bottom: .6rem; padding: .85rem;
+  background: linear-gradient(135deg, var(--primary), #2f8f6f); color: #fff; border: 0; font-size: 1.05rem; font-weight: 600; }
+.voice-btn small { font-weight: 400; opacity: .9; font-size: .82rem; }
+.voice-say textarea { font-size: 1.05rem; }
+.voice-actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.voice-mic.listening { background: var(--danger); color: #fff; border-color: var(--danger); }
+.voice-understood { font-weight: 600; font-size: .92rem; }
+.voice-card { border: 1px solid var(--line); border-radius: 12px; padding: .6rem .7rem; display: grid; gap: .45rem; background: var(--card); }
+.voice-card.done { color: var(--muted); font-size: .9rem; }
+.voice-card.ask { font-size: .98rem; line-height: 1.4; }
+.voice-head { font-weight: 600; }
+.voice-card input.missing { border-color: var(--danger); }
+.voice-help summary { cursor: pointer; color: var(--primary); font-size: .92rem; }
+.voice-help ul { margin: .4rem 0; padding-left: 1.1rem; }
+.linkish { background: none; border: 0; padding: .15rem 0; color: var(--primary); text-align: left; font: inherit; cursor: pointer; }

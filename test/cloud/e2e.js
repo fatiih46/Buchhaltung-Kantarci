@@ -366,6 +366,62 @@ ${dd}      17:12
   await fatih.click(`#potList .del-btn[data-del="/api/pot-entries/${shellEntry.id}"]`);
   await fatih.waitForFunction(() => !document.querySelector('#potList').textContent.includes('Shell'));
 
+  // ---------- 6d3. Sprachassistent: „Am 2. … 72 € bei Tanken und 12,50 Döner“, Frage, neues Budget ----------
+  const mm = curYm.slice(5, 7);
+  const openVoice = async () => {
+    await fatih.click('#fab');
+    await fatih.click('[data-qa=voice]');
+    await fatih.waitForSelector('#dlg[open] [name=say]');
+  };
+  await fatih.evaluate((m) => { state.month = m; state.kosten = 'variabel'; switchTab('kosten'); }, curYm);
+  await openVoice();
+  assert.equal(await fatih.evaluate(() => document.activeElement?.name), 'say', 'Tastatur gleich offen');
+  assert.equal(await fatih.isVisible('#dlgForm button[type=submit]'), false, 'erst nach dem Sprechen');
+  await fatih.fill('#dlgBody [name=say]', `Bitte am 2.${mm}. 72 € bei Tanken und 12,50 Döner`);
+  await fatih.waitForFunction(() => document.querySelectorAll('#dlgBody .voice-card').length === 2);
+  const tankVoice = (await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Tanken');
+  await fatih.waitForFunction((id) => document.querySelector('#dlgBody [name=v0_where]').value === `pot:${id}`, tankVoice.id);
+  assert.equal(await fatih.inputValue('#dlgBody [name=v0_amount]'), '72');
+  assert.equal(await fatih.inputValue('#dlgBody [name=v0_date]'), `${curYm}-02`);
+  // Döner: in ein Budget, dem „Essen gehen“ zugeordnet ist – sonst eigenes Geld mit dieser Kategorie
+  const essenPot = (await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.active && p.categories.includes('Essen gehen & Lieferdienste'));
+  assert.equal(await fatih.inputValue('#dlgBody [name=v1_where]'), essenPot ? `pot:${essenPot.id}` : 'own:Essen gehen & Lieferdienste');
+  await fatih.selectOption('#dlgBody [name=v1_where]', 'own:Essen gehen & Lieferdienste'); // selbst umstellen geht
+  assert.equal(await fatih.inputValue('#dlgBody [name=v1_amount]'), '12,50');
+  assert.equal(await fatih.inputValue('#dlgBody [name=v1_date]'), `${curYm}-02`, 'Datum gilt für beide');
+  assert.match(await fatih.textContent('#dlgForm button[type=submit]'), /Alle 2 eintragen/);
+  await fatih.waitForTimeout(250);
+  await shot(fatih, 'cloud-29-sprachassistent.png');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  await fatih.waitForFunction(() => document.querySelector('#toast').textContent.includes('2 Einträge gespeichert'));
+  const tankAfter = (await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Tanken');
+  const voicePot = tankAfter.entries.find((e) => e.amount === 72 && e.note === 'Tanken');
+  assert.ok(voicePot, 'vom Budget Tanken abgezogen');
+  const doener = (await api(fatih, 'GET', `/api/entries?month=${curYm}`)).find((e) => e.note === 'Döner');
+  assert.deepEqual([doener.amount, doener.category, doener.date, doener.kind], [12.5, 'Essen gehen & Lieferdienste', `${curYm}-02`, 'mehr']);
+  // Frage
+  await openVoice();
+  await fatih.fill('#dlgBody [name=say]', 'Wie viel ist noch bei Tanken?');
+  await fatih.waitForFunction(() => /noch .*übrig/.test(document.querySelector('#dlgBody .voice-card.ask')?.textContent || ''));
+  assert.match(await fatih.textContent('#dlgBody .voice-card.ask'), new RegExp(`Tanken.*noch\\s${tankAfter.available.toFixed(2).replace('.', ',')}`));
+  assert.equal(await fatih.isVisible('#dlgForm button[type=submit]'), false, 'Frage: nichts zu speichern');
+  // ohne Betrag: nachfragen
+  await fatih.fill('#dlgBody [name=say]', 'Tanken');
+  await fatih.waitForSelector('#dlgBody [name=v0_amount].missing');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForFunction(() => document.querySelector('#dlgError').textContent.includes('Betrag'));
+  // neues Budget
+  await fatih.fill('#dlgBody [name=say]', 'Lege ein Budget Urlaub mit 300 € im Monat an');
+  await fatih.waitForFunction(() => document.querySelector('#dlgBody [name=v0_name]')?.value === 'Urlaub');
+  await fatih.click('#dlgForm button[type=submit]');
+  await fatih.waitForSelector('#dlg', { state: 'hidden' });
+  const urlaub = (await api(fatih, 'GET', `/api/pots?month=${curYm}`)).pots.find((p) => p.name === 'Urlaub');
+  assert.deepEqual([urlaub.amount, urlaub.icon, urlaub.categories], [300, '✈️', ['Urlaub']]);
+  await api(fatih, 'DELETE', `/api/pots/${urlaub.id}`);
+  await api(fatih, 'DELETE', `/api/pot-entries/${voicePot.id}`);
+  await api(fatih, 'DELETE', `/api/entries/${doener.id}`);
+
   // ---------- 6e. Kategorie aus freiem Text erkennen ----------
   await fatih.click('#fab');
   await fatih.click('[data-qa=ausgabe]');

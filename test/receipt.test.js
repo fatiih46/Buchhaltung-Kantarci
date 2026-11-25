@@ -132,3 +132,32 @@ darin enthaltene USt. 19 % 6,38 €`, TODAY);
   assert.equal(t.category, 'Handy, Internet & Abos');
   assert.equal(parseReceipt('MwSt 19% 3,83\nSumme 23,99', TODAY).amount, 23.99, 'reine Steuerzeile zählt nicht');
 });
+
+const { parseCommand } = require('../public/receipt.js');
+test('Sprachassistent: Sätze verstehen (Betrag, Ziel, Datum, Art)', () => {
+  const T = new Date(2026, 10, 25); // Mittwoch, 25.11.2026
+  const one = (s) => { const r = parseCommand(s, T); assert.equal(r.length, 1, s); return r[0]; };
+  let c = one('So, bitte füge 120 € bei Tanken ein');
+  assert.deepEqual([c.type, c.amount, c.target, c.category, c.date], ['expense', 120, 'Tanken', 'Auto & Verschleiß', null]);
+  c = one('Füge bei Sparen 200 ein');
+  assert.deepEqual([c.type, c.amount, c.target, c.category], ['expense', 200, 'Sparen', 'Sparen & Rücklagen']);
+  c = one('Lege ein Budget Urlaub mit 300 € im Monat an');
+  assert.deepEqual([c.type, c.amount, c.target], ['createPot', 300, 'Urlaub']);
+  c = one('Erstelle Kategorie Hochzeit 500 Euro');
+  assert.deepEqual([c.type, c.amount, c.target], ['createPot', 500, 'Hochzeit']);
+  c = one('Wie viel ist noch bei Tanken?');
+  assert.deepEqual([c.type, c.target], ['ask', 'Tanken']);
+  c = one('Habe 30 € für Vinted Verkauf bekommen');
+  assert.deepEqual([c.type, c.amount], ['income', 30]);
+  assert.equal(one('12 Euro 50 Bäcker').amount, 12.5);
+  assert.equal(one('fünfzig Euro Kino').amount, 50);
+  c = one('am 20.11. 1.250 € Waschmaschine');
+  assert.deepEqual([c.amount, c.date, c.target], [1250, '2026-11-20', 'Waschmaschine']);
+  assert.equal(one('Am Montag 60 Euro getankt').date, '2026-11-23');
+  assert.equal(one('Mayonnaise und Ketchup für 6,50 €').target, 'Mayonnaise Ketchup', 'ohne Betrag nicht trennen');
+  const two = parseCommand('gestern 45,90 bei Rewe und 20 € Döner', T);
+  assert.deepEqual(two.map((x) => [x.amount, x.date, x.shop, x.category]),
+    [[45.9, '2026-11-24', 'Rewe', 'Einkaufen & Lebensmittel'], [20, '2026-11-24', '', 'Essen gehen & Lieferdienste']]);
+  assert.deepEqual(parseCommand('', T), []);
+  assert.equal(one('Tanken').amount, null, 'ohne Betrag: nachfragen');
+});

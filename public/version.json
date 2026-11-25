@@ -1,6 +1,7 @@
 {
-  "version": "2026.11.26",
+  "version": "2026.11.27",
   "notes": [
+    "🎤 Neu: Sprachassistent – auf ＋ tippen, „🎤 Einfach sagen“ und z. B. „120 € bei Tanken“ sprechen. Die App ordnet selbst zu, du bestätigst nur noch.",
     "🖼️ Screenshots und PDF-Rechnungen scannen: Betrag, Geschäft und Datum werden erkannt, das passende Budget (z. B. Tanken) gewählt und abgezogen.",
     "✏️ Freigabe in drei Stufen unter ⚙: privat, nur ansehen oder ansehen und ändern – jederzeit umschaltbar, jede Person für ihre eigenen Daten.",
     "⚠️ Nutzungsbedingungen: Nutzung auf eigene Gefahr, ohne Haftung – einmal bestätigen."
