@@ -113,7 +113,7 @@ $('#registerForm').addEventListener('submit', async (e) => {
   const f = new FormData(e.target);
   const join = f.get('mode') === 'join';
   // vor dem Anlegen des Kontos: Hinweis zur Nutzung bestätigen
-  if (!noticeOkInSession && !(await showNotice({ confirmText: 'Verstanden – Konto erstellen', cancel: true }))) return;
+  if (!noticeOkInSession && !(await showNotice({ confirmText: 'Akzeptieren – Konto erstellen', cancel: true }))) return;
   noticeOkInSession = true;
   try {
     await api('POST', '/api/register', {
@@ -198,20 +198,26 @@ async function showNewsOnce({ skip = false } = {}) {
 // ---------- Hinweis zur Nutzung ----------
 let noticeJustAccepted = false;
 let noticeOkInSession = false; // bei mehreren Versuchen (z. B. Tippfehler im Code) nicht jedes Mal fragen
-function showNotice({ confirmText = 'Verstanden', cancel = false } = {}) {
+// readOnly: nur zum Nachlesen (ohne Häkchen); sonst muss das Häkchen gesetzt werden
+function showNotice({ confirmText = 'Akzeptieren', cancel = false, cancelText = 'Abbrechen', readOnly = false } = {}) {
   const d = $('#noticeDlg');
-  $('#noticeOk').textContent = confirmText;
+  $('#noticeOk').textContent = readOnly ? 'Schließen' : confirmText;
+  $('#noticeCancel').textContent = cancelText;
   $('#noticeCancel').hidden = !cancel;
+  $('.notice-accept', d).hidden = readOnly;
+  $('#noticeAccept').checked = false;
+  $('#noticeOk').disabled = !readOnly;
+  $('#noticeAccept').onchange = () => { $('#noticeOk').disabled = !$('#noticeAccept').checked; };
   d.showModal();
   $('.notice-text', d).scrollTop = 0;
   return new Promise((resolve) => {
     const done = (ok) => { d.close(); $('#noticeOk').onclick = $('#noticeCancel').onclick = d.oncancel = null; resolve(ok); };
     $('#noticeOk').onclick = () => done(true);
     $('#noticeCancel').onclick = () => done(false);
-    d.oncancel = (e) => { e.preventDefault(); if (cancel) done(false); }; // ohne „Abbrechen“ nur mit „Verstanden“ schließen
+    d.oncancel = (e) => { e.preventDefault(); if (cancel || readOnly) done(readOnly); }; // sonst nur über die Knöpfe
   });
 }
-const noticeKey = () => `hinweis-gelesen-${state.me.user.id}`;
+const noticeKey = () => `nutzungsbedingungen-v2-${state.me.user.id}`;
 function noticeSeen() {
   if (state.me.noticeAccepted) return true;
   try { return localStorage.getItem(noticeKey()) === '1'; } catch { return false; }
@@ -220,7 +226,7 @@ async function rememberNotice() {
   try { localStorage.setItem(noticeKey(), '1'); } catch { /* privates Fenster */ }
   if (window.Cloud?.enabled) await api('POST', '/api/notice').catch(() => {});
 }
-$('#showNotice').addEventListener('click', () => showNotice());
+$('#showNotice').addEventListener('click', () => showNotice({ readOnly: true }));
 
 function authMessage(err) {
   $('#authError').textContent = err.message;
@@ -262,7 +268,13 @@ async function boot() {
   setupViewSwitch();
   // bestehende Konten: Hinweis einmal anzeigen; danach (oder sonst) einmal „Neu in dieser Version“
   if (noticeJustAccepted) { noticeJustAccepted = false; rememberNotice(); showNewsOnce({ skip: true }); }
-  else if (!noticeSeen()) showNotice().then(rememberNotice).then(() => showNewsOnce());
+  else if (!noticeSeen()) {
+    showNotice({ cancel: true, cancelText: 'Ablehnen und abmelden' }).then(async (ok) => {
+      if (!ok) { $('#logout').click(); return; }
+      await rememberNotice();
+      showNewsOnce();
+    });
+  }
   else showNewsOnce();
   checkForUpdate();
   if (window.Cloud?.recovery) {
@@ -456,7 +468,11 @@ async function renderKasse() {
       <div class="progress ${p.available < 0 ? 'over' : ''}"><i style="width:${pct}%"></i></div>
       ${p.carryIn < 0 ? `<p class="pot-warn">⚠️ Aus dem Vormonat wurden <strong>${fmt(-p.carryIn)}</strong> Überschreitung übernommen.</p>` : ''}
       ${p.available < 0 ? `<p class="pot-warn">⚠️ ${fmt(-p.available)} überschritten – wird${p.carryover ? ' in den nächsten Monat übertragen' : ' festgehalten'}. Achtet mehr darauf oder passt das Budget an (oben antippen).</p>` : ''}
-      ${p.entries.length ? `<ul class="list compact pot-entries">${p.entries.map((e) => e.kind === 'korrektur' ? `<li class="korrektur">
+      ${p.entries.length || p.carryIn ? `<ul class="list compact pot-entries">${p.carryIn ? `<li class="carry">
+        <div class="main"><div class="title">↪️ Übertrag aus ${monthLabel(shiftMonth(state.month, -1))}</div>
+          <div class="meta">${p.carryIn > 0 ? 'Rest aus dem Vormonat – automatisch übernommen' : 'Überschreitung aus dem Vormonat – automatisch übernommen'}</div></div>
+        <div class="right num ${p.carryIn < 0 ? 'neg' : 'pos'}">${p.carryIn > 0 ? '+' : '−'}${fmt(Math.abs(p.carryIn))}</div>
+      </li>` : ''}${p.entries.map((e) => e.kind === 'korrektur' ? `<li class="korrektur">
         <div class="main"><div class="title">✏️ Korrektur: ${esc(e.note)}</div>
           <div class="meta">${fmtDate(e.date)} · ${esc(e.who)}</div></div>
         <div class="right num ${e.amount < 0 ? 'neg' : 'pos'}">${e.amount > 0 ? '+' : '−'}${fmt(Math.abs(e.amount))}</div>
@@ -721,31 +737,62 @@ function setupViewSwitch() {
   sel.hidden = !window.Cloud?.enabled || !others.length;
   $('#hello').hidden = !sel.hidden;
   sel.innerHTML = `<option value="">👤 ${esc(state.me.user.name)} (meine Daten)</option>` +
-    others.map((m) => `<option value="${m.id}">👀 ${esc(m.name)}</option>`).join('');
+    others.map((m) => `<option value="${m.id}">${m.shareEdit ? '✏️' : '👀'} ${esc(m.name)}</option>`).join('');
   sel.value = state.viewing?.id || '';
 }
 async function switchView(id) {
   const m = (state.me.members || []).find((x) => x.id === id);
-  try { await Cloud.setView(m ? m.id : null, m ? m.name : null); } catch (err) { toast(err.message); $('#viewAs').value = ''; return; }
-  state.viewing = m || null;
-  document.body.classList.toggle('readonly', !!m);
-  $('#viewBanner').hidden = !m;
-  $('#viewName').textContent = m ? m.name : '';
+  let res;
+  try { res = await Cloud.setView(m ? m.id : null, m ? m.name : null); } catch (err) { toast(err.message); $('#viewAs').value = ''; return; }
+  state.viewing = m ? { ...m, canEdit: !!res?.canEdit } : null;
   $('#viewAs').value = m ? m.id : '';
+  applyViewMode();
   render();
 }
+// Ansehen = alles gesperrt; mit Erlaubnis zum Ändern = normal bedienbar, nur mit Hinweis oben
+function applyViewMode() {
+  const v = state.viewing;
+  document.body.classList.toggle('readonly', !!v && !v.canEdit);
+  document.body.classList.toggle('editing-other', !!v?.canEdit);
+  $('#viewBanner').hidden = !v;
+  $('#viewName').textContent = v ? v.name : '';
+  $('#viewLead').textContent = v?.canEdit ? '✏️ Du bearbeitest die Einträge von ' : '👀 Einträge von ';
+  $('#viewMode').textContent = v?.canEdit ? 'Änderungen werden dort gespeichert' : 'nur ansehen';
+}
+window.addEventListener('haushalt:viewlocked', () => {
+  if (!state.viewing) return;
+  state.viewing.canEdit = false;
+  applyViewMode();
+  render();
+});
 $('#viewAs').addEventListener('change', (e) => switchView(e.target.value));
 $('#viewBack').addEventListener('click', () => switchView(''));
-$('#shareAll').addEventListener('change', async (e) => {
+const SHARE_TOAST = {
+  none: 'Freigabe ausgeschaltet – deine Einträge sind wieder privat',
+  view: 'Freigegeben zum Ansehen – die anderen im Haushalt können deine Einträge sehen, aber nicht ändern',
+  edit: 'Freigegeben zum Ansehen und Ändern – die anderen im Haushalt dürfen deine Einträge jetzt auch bearbeiten',
+};
+const myShareLevel = () => {
+  const me = (state.me.members || []).find((m) => m.id === state.me.user.id);
+  return me?.shareEdit ? 'edit' : me?.shareAll ? 'view' : 'none';
+};
+$$('[name=shareLevel]').forEach((r) => r.addEventListener('change', async (e) => {
+  const level = e.target.value;
+  if (level === 'edit' && !confirm('Wirklich erlauben, dass die anderen in eurem Haushalt deine Einträge ändern und löschen dürfen?\n\nDu kannst das jederzeit wieder ausschalten.')) {
+    $(`[name=shareLevel][value=${myShareLevel()}]`).checked = true;
+    return;
+  }
   try {
-    await api('POST', '/api/share', { share: e.target.checked });
-    toast(e.target.checked ? 'Freigegeben – die anderen im Haushalt können deine Einträge jetzt ansehen' : 'Freigabe ausgeschaltet');
-  } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
-});
+    await api('POST', '/api/share', { level });
+    const me = state.me.members.find((m) => m.id === state.me.user.id);
+    if (me) { me.shareAll = level !== 'none'; me.shareEdit = level === 'edit'; }
+    toast(SHARE_TOAST[level]);
+  } catch (err) { $(`[name=shareLevel][value=${myShareLevel()}]`).checked = true; toast(err.message); }
+}));
 
 function renderAccount() {
   $('#shareCard').hidden = !window.Cloud?.enabled || (state.me.members || []).length < 2;
-  $('#shareAll').checked = !!(state.me.members || []).find((m) => m.id === state.me.user.id)?.shareAll;
+  $(`[name=shareLevel][value=${myShareLevel()}]`).checked = true;
   $('#accountInfo').textContent = `${state.me.user.name} · ${state.me.user.email} · Haushalt „${state.me.household.name}“ (${state.me.members.map((m) => m.name).join(', ')})`;
   $('#adminCard').hidden = !state.me.isAdmin;
   if (state.me.isAdmin) renderAdmin();
@@ -844,6 +891,8 @@ $('#pwForm').addEventListener('submit', async (e) => {
 // ---------- „＋“ unten rechts: Schnell eintragen ----------
 const QUICK = {
   scan: () => $('#scanInput').click(),
+  scanpick: () => $('#scanPick').click(),
+  voice: () => openVoiceDialog(),
   ausgabe: () => openEntryDialog({ kind: 'mehr' }),
   einnahme: () => openEntryDialog({ kind: 'weniger' }),
   fix: () => openFixedDialog(),
@@ -859,13 +908,13 @@ const QUICK = {
   geburtstag: () => openBirthdayDialog(),
 };
 $('#fab').addEventListener('click', () => $('#quickDlg').showModal());
-$('#scanInput').addEventListener('change', (e) => {
+['#scanInput', '#scanPick'].forEach((sel) => $(sel).addEventListener('change', (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
   openEntryDialog({ kind: 'mehr' });
   scanInto($('#dlgBody'), file);
-});
+}));
 $('#quickClose').addEventListener('click', () => $('#quickDlg').close());
 $('#quickDlg').addEventListener('click', (e) => {
   if (e.target === $('#quickDlg')) { $('#quickDlg').close(); return; } // Tipp neben das Menü schließt es
@@ -894,7 +943,7 @@ $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
   state.tab = 'overview';
   state.viewing = null;
-  document.body.classList.remove('readonly');
+  document.body.classList.remove('readonly', 'editing-other');
   $('#viewBanner').hidden = true;
   showAuth();
 });
@@ -902,8 +951,10 @@ $('#logout').addEventListener('click', async () => {
 // ---------- Dialoge ----------
 const dlg = $('#dlg');
 let dlgHandlers = null;
-function openDialog({ title, html, onSave, onDelete, onOpen }) {
+function openDialog({ title, html, onSave, onDelete, onOpen, saveText = 'Speichern' }) {
   $('#dlgTitle').textContent = title;
+  $('#dlgForm button[type=submit]').textContent = saveText;
+  $('#dlgForm button[type=submit]').hidden = false;
   // frisches Element, damit keine Event-Listener vom vorherigen Dialog übrig bleiben
   const fresh = $('#dlgBody').cloneNode(false);
   $('#dlgBody').replaceWith(fresh);
@@ -915,8 +966,8 @@ function openDialog({ title, html, onSave, onDelete, onOpen }) {
   $('#dlgError').textContent = '';
   $('#dlgDelete').hidden = !onDelete;
   // Einträge des Partners: nur ansehen
-  const ro = !!state.viewing;
-  $('#dlgForm button[type=submit]').hidden = ro;
+  const ro = !!state.viewing && !state.viewing.canEdit;
+  if (ro) $('#dlgForm button[type=submit]').hidden = true;
   $('#dlgCancel').textContent = ro ? 'Schließen' : 'Abbrechen';
   if (ro) {
     $('#dlgDelete').hidden = true;
@@ -933,9 +984,9 @@ dlg.addEventListener('close', () => { if (attChanged) { attChanged = false; rend
 $('#dlgForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await dlgHandlers.onSave(Object.fromEntries(new FormData(e.target)));
+    const res = await dlgHandlers.onSave(Object.fromEntries(new FormData(e.target)));
     dlg.close(); render();
-    toast('Gespeichert ✓');
+    toast(res?.toast || 'Gespeichert ✓');
   } catch (err) { $('#dlgError').textContent = err.message; }
 });
 $('#dlgDelete').addEventListener('click', async () => {
@@ -949,7 +1000,7 @@ const intervalSelect = (v = 1) => `<label>Wie oft?
 // Passendes gemeinsames Budget finden: zuerst der Name des Topfs im Text („Auto heile gemacht“ -> Topf „Auto“),
 // dann die zugeordneten Kategorien, dann die Kategorie, die zum Topfnamen passt
 const normWords = (t) => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
-function bestPot(pots, r) {
+function bestPot(pots, r, minScore = 1) {
   const text = normWords([r.text, r.shop].filter(Boolean).join(' '));
   let best = null, bestScore = 0;
   for (const p of pots) {
@@ -963,7 +1014,7 @@ function bestPot(pots, r) {
     if (r.category && window.HaushaltReceipt?.classifyText(p.name) === r.category) score += 1;
     if (score > bestScore) { best = p; bestScore = score; }
   }
-  return best;
+  return bestScore >= minScore ? best : null;
 }
 // Text in den Feldern lesen und die Kategorie vorschlagen, solange man sie nicht selbst gewählt hat
 function autoCategory(body, inputs, isTouched) {
@@ -1082,8 +1133,11 @@ function openEntryDialog(item = {}) {
     title: isEdit ? 'Eintrag bearbeiten' : (kind === 'mehr' ? 'Neue Ausgabe' : 'Einnahme / Erstattung'),
     html: `
       ${isEdit ? '' : `<div class="scan-box">
-        <label class="btn scan-btn">📷 Kassenbon scannen<input type="file" accept="image/*" capture="environment" data-scan hidden></label>
-        <div class="muted small" data-scan-status>Betrag, Geschäft und Datum werden automatisch eingetragen – du prüfst und speicherst.</div>
+        <div class="scan-row">
+          <label class="btn scan-btn">📷 Kassenbon fotografieren<input type="file" accept="image/*" capture="environment" data-scan hidden></label>
+          <label class="btn scan-btn alt">🖼️ Screenshot / PDF<input type="file" accept="image/*,application/pdf" data-scan hidden></label>
+        </div>
+        <div class="muted small" data-scan-status>Foto, Screenshot oder PDF-Rechnung: Betrag, Geschäft, Datum und Budget werden automatisch eingetragen – du prüfst und speicherst.</div>
       </div>`}
       ${withPots ? `<label data-paid-from hidden>Bezahlt aus
         <select name="paid_from"><option value="">👤 Meinem eigenen Geld</option></select></label>` : ''}
@@ -1138,11 +1192,11 @@ function openEntryDialog(item = {}) {
           pickPot(body.lastScan); // falls der Scan schon fertig war
         }).catch(() => {});
       }
-      $('[data-scan]', body)?.addEventListener('change', (e) => {
+      $$('[data-scan]', body).forEach((inp) => inp.addEventListener('change', (e) => {
         const file = e.target.files[0];
         e.target.value = '';
         if (file) scanInto(body, file);
-      });
+      }));
     },
     onSave: async (d) => {
       if (isEdit) return api('PUT', `/api/entries/${item.id}`, d);
@@ -1159,6 +1213,149 @@ function openEntryDialog(item = {}) {
     },
     onDelete: isEdit && (() => api('DELETE', `/api/entries/${item.id}`)),
   });
+}
+
+// ---------- 🎤 Sprachassistent: Satz sagen oder tippen, die App versteht und ordnet zu, du bestätigst ----------
+// Alles läuft auf dem Handy (public/receipt.js → parseCommand). Gesprochen wird über das 🎤 der Tastatur
+// oder – wo der Browser es kann – über den Knopf „Jetzt sprechen“.
+const CAT_ICON = { 'Auto & Verschleiß': '⛽', 'Einkaufen & Lebensmittel': '🛒', 'Freizeit': '🎉', 'Essen gehen & Lieferdienste': '🍽️',
+  'Haus & Wohnen': '🏠', 'Kinder': '👶', 'Gesundheit': '💊', 'Geschenke': '🎁', 'Urlaub': '✈️' };
+const VOICE_EXAMPLES = ['120 € bei Tanken', 'Füge bei Sparen 200 ein', 'Gestern 45,90 bei Rewe und 20 € Döner',
+  'Lege ein Budget Urlaub mit 300 € im Monat an', 'Wie viel ist noch bei Tanken?', 'Habe 30 € für Vinted-Verkauf bekommen'];
+function openVoiceDialog() {
+  let pots = [];
+  let cmds = [];
+  const cloud = !!window.Cloud?.enabled;
+  const who = state.viewing?.canEdit ? ` <span class="muted small">(bei ${esc(state.viewing.name)})</span>` : '';
+  const catOptions = (sel) => state.meta.categories.map((c) => `<option value="own:${esc(c)}" ${sel === `own:${c}` ? 'selected' : ''}>👤 ${esc(c)}</option>`).join('');
+  const whereSelect = (i, sel) => `<label>Wohin?<select name="v${i}_where">
+      ${pots.length ? `<optgroup label="Gemeinsame Budgets (wird abgezogen)">${pots.map((p) => `<option value="pot:${p.id}" ${sel === `pot:${p.id}` ? 'selected' : ''}>${esc(p.icon)} ${esc(p.name)} (noch ${fmt(p.available)})</option>`).join('')}</optgroup>` : ''}
+      <optgroup label="Mein eigenes Geld – Kategorie">${catOptions(sel)}</optgroup></select></label>`;
+  const amountField = (i, c, label = 'Betrag (€)') => `<label>${label}<input name="v${i}_amount" inputmode="decimal" value="${c.amount != null ? (c.amount % 1 ? c.amount.toFixed(2) : String(c.amount)).replace('.', ',') : ''}" placeholder="Wie viel?" ${c.amount == null ? 'class="missing"' : ''}></label>`;
+  const potFor = (c) => (cloud ? bestPot(pots, { text: c.target, shop: c.shop, category: c.category }, 2) : null);
+  async function answer(c) {
+    const pot = potFor(c);
+    if (pot) return `${esc(pot.icon)} <strong>${esc(pot.name)}</strong>: noch <strong>${fmt(pot.available)}</strong> übrig – ausgegeben ${fmt(pot.spent)} von ${fmt(pot.amount + (pot.carryIn || 0))}.`;
+    if (c.category && c.target) {
+      const list = await api('GET', `/api/entries?month=${state.month}`);
+      const spent = list.filter((e) => e.kind === 'mehr' && e.category === c.category).reduce((s, e) => s + e.amount, 0);
+      return `Für <strong>${esc(c.category)}</strong> ${state.viewing ? `hat ${esc(state.viewing.name)}` : 'hast du'} im ${esc(monthLabel(state.month))} <strong>${fmt(spent)}</strong> ausgegeben.`;
+    }
+    const s = await api('GET', `/api/summary?month=${state.month}`);
+    return `Im ${esc(monthLabel(state.month))} ${state.viewing ? `bleiben ${esc(state.viewing.name)}` : 'bleiben dir'} noch <strong>${fmt(s.available)}</strong>.`;
+  }
+  function card(c, i) {
+    if (c.done) return `<div class="voice-card done">✅ Gespeichert: ${esc(c.text)}</div>`;
+    const date = `<label>Datum<input type="date" name="v${i}_date" value="${c.date || todayInMonth(state.month)}"></label>`;
+    const note = `<label>Notiz<input name="v${i}_note" maxlength="200" value="${esc(c.target)}"></label>`;
+    if (c.type === 'ask') return `<div class="voice-card ask" data-ask="${i}">💬 <span class="muted">Einen Moment …</span></div>`;
+    if (c.type === 'createPot') {
+      if (!cloud) return `<div class="voice-card">⚠️ Gemeinsame Budgets gibt es nur in der Cloud-Version.</div>`;
+      return `<div class="voice-card"><div class="voice-head">🆕 Neues gemeinsames Budget</div>
+        <div class="row2"><label>Name<input name="v${i}_name" maxlength="40" value="${esc(c.target)}" placeholder="z. B. Urlaub"></label>
+        ${amountField(i, c, 'Pro Monat (€)')}</div></div>`;
+    }
+    if (c.type === 'income') {
+      return `<div class="voice-card"><div class="voice-head">💶 Einnahme / Erstattung${who}</div>
+        <div class="row2">${amountField(i, c)}${date}</div>
+        <label>Kategorie<select name="v${i}_where">${catOptions(`own:${c.category || 'Sonstiges'}`)}</select></label>${note}</div>`;
+    }
+    const pot = potFor(c);
+    const sel = pot ? `pot:${pot.id}` : `own:${c.category || 'Sonstiges'}`;
+    const guess = pot ? `🤖 Erkannt: Budget <strong>${esc(pot.icon)} ${esc(pot.name)}</strong> – wird dort abgezogen.`
+      : c.category ? `🤖 Erkannt: <strong>${esc(c.category)}</strong> (eigenes Geld).` : '🤔 Nicht sicher, wohin – bitte auswählen.';
+    return `<div class="voice-card"><div class="voice-head">💸 Ausgabe${who}</div>
+      <div class="hint">${guess}</div>
+      <div class="row2">${amountField(i, c)}${date}</div>${whereSelect(i, sel)}${note}</div>`;
+  }
+  function show(body) {
+    const box = $('[data-voice-result]', body);
+    const save = $('#dlgForm button[type=submit]');
+    const todo = cmds.filter((c) => !c.done && c.type !== 'ask');
+    save.hidden = !todo.length;
+    save.textContent = todo.length > 1 ? `✅ Alle ${todo.length} eintragen` : '✅ Eintragen';
+    if (!cmds.length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="voice-understood">So habe ich es verstanden – bitte kurz prüfen:</div>` + cmds.map(card).join('');
+    cmds.forEach((c, i) => {
+      if (c.type !== 'ask') return;
+      answer(c).then((html) => { const el = $(`[data-ask="${i}"]`, body); if (el) el.innerHTML = `💬 ${html}`; })
+        .catch((err) => { const el = $(`[data-ask="${i}"]`, body); if (el) el.textContent = err.message; });
+    });
+  }
+  openDialog({
+    title: '🎤 Sprachassistent',
+    saveText: '✅ Eintragen',
+    html: `
+      <label class="voice-say">Was soll ich eintragen?
+        <textarea name="say" rows="2" maxlength="500" autocomplete="off" placeholder="z. B. „120 € bei Tanken“"></textarea></label>
+      <div class="voice-actions">
+        <button type="button" class="btn voice-mic" data-mic hidden>🎤 Jetzt sprechen</button>
+        <span class="muted small" data-voice-tip>Tipp: Tippe auf das 🎤 auf deiner Tastatur und sprich einfach los.</span>
+      </div>
+      <div data-voice-result class="stack"></div>
+      <details class="voice-help"><summary>Was kann ich sagen?</summary>
+        <ul>${VOICE_EXAMPLES.map((x) => `<li><button type="button" class="linkish" data-example>${esc(x)}</button></li>`).join('')}</ul>
+        <p class="muted small">Ich verstehe Beträge, „heute/gestern/am Montag/am 5.11.“, mehrere Dinge mit „und“, neue Budgets und Fragen.
+        Die Zuordnung lerne ich mit – was du bestätigst, erkenne ich beim nächsten Mal von selbst.</p></details>`,
+    onOpen: (body) => {
+      const ta = $('[name=say]', body);
+      let timer;
+      const update = () => { cmds = [...cmds.filter((c) => c.done), ...HaushaltReceipt.parseCommand(ta.value)]; show(body); };
+      ta.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(update, 300); });
+      $$('[data-example]', body).forEach((b) => b.addEventListener('click', () => { ta.value = b.textContent; update(); }));
+      if (cloud) api('GET', `/api/pots?month=${state.month}`).then((k) => { pots = k.pots.filter((p) => p.active); if (ta.value) show(body); }).catch(() => {});
+      // Spracherkennung des Browsers (am Computer/Android meist vorhanden; am iPhone das 🎤 der Tastatur nutzen)
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const mic = $('[data-mic]', body);
+      if (SR) {
+        mic.hidden = false;
+        let rec = null;
+        mic.addEventListener('click', () => {
+          if (rec) { rec.stop(); return; }
+          rec = new SR();
+          rec.lang = 'de-DE'; rec.interimResults = true;
+          const startText = ta.value ? `${ta.value} ` : '';
+          rec.onresult = (ev) => { ta.value = startText + [...ev.results].map((r) => r[0].transcript).join(''); clearTimeout(timer); timer = setTimeout(update, 300); };
+          rec.onerror = () => toast('Mikrofon nicht verfügbar – nutze das 🎤 auf der Tastatur.');
+          rec.onend = () => { rec = null; mic.textContent = '🎤 Jetzt sprechen'; mic.classList.remove('listening'); update(); };
+          mic.textContent = '⏹ Fertig'; mic.classList.add('listening');
+          rec.start();
+        });
+      }
+      $('#dlgForm button[type=submit]').hidden = true;
+    },
+    onSave: async (d) => {
+      let saved = 0;
+      for (const [i, c] of cmds.entries()) {
+        if (c.done || c.type === 'ask') continue;
+        if (c.type === 'createPot' && !cloud) continue;
+        const amount = d[`v${i}_amount`];
+        if (!parseAmount(amount)) { show($('#dlgBody')); throw new Error(`Bitte einen Betrag angeben („${c.text}“).`); }
+        if (c.type === 'createPot') {
+          const name = String(d[`v${i}_name`] || '').trim();
+          if (!name) throw new Error('Bitte einen Namen für das neue Budget angeben.');
+          const cat = HaushaltReceipt.classifyText(name);
+          await api('POST', '/api/pots', { name, icon: CAT_ICON[cat] || '💰', amount, carryover: true, month: state.month,
+            categories: cat ? [cat] : [], keywords: '' });
+        } else {
+          const where = d[`v${i}_where`] || 'own:Sonstiges';
+          const base = { date: d[`v${i}_date`], amount, shop: c.shop, note: d[`v${i}_note`] || '' };
+          if (where.startsWith('pot:')) {
+            const potId = where.slice(4);
+            await Cloud.addPotEntry({ ...base, pot_id: potId });
+            Cloud.learnPotWords(potId, [base.note, base.shop].filter(Boolean).join(' ')).catch(() => {});
+          } else {
+            await api('POST', '/api/entries', { ...base, kind: c.type === 'income' ? 'weniger' : 'mehr', category: where.slice(4) });
+          }
+        }
+        c.done = true; // bei einem Fehler weiter hinten wird das hier nicht doppelt gespeichert
+        saved++;
+      }
+      return { toast: saved > 1 ? `${saved} Einträge gespeichert ✓` : 'Eingetragen ✓' };
+    },
+  });
+  // Tastatur gleich öffnen (am iPhone nur direkt nach dem Tippen möglich)
+  $('#dlgBody [name=say]').focus();
 }
 
 // ---------- Kassenbon scannen: Texterkennung direkt auf dem Handy (Tesseract), danach bestätigen ----------
@@ -1196,11 +1393,47 @@ async function ocrImage(file) {
     return c;
   } catch { return file; }
 }
+// PDF-Rechnung: Text direkt aus der Datei lesen (genauer als ein Foto); eingescannte PDFs: erste Seite als Bild erkennen
+let pdfjsLib = null;
+async function readPdf(file) {
+  if (!pdfjsLib) {
+    pdfjsLib = await import(new URL('vendor/pdfjs/pdf.min.mjs', location.href).href);
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('vendor/pdfjs/pdf.worker.min.mjs', location.href).href;
+  }
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  let text = '';
+  for (let n = 1; n <= Math.min(doc.numPages, 3); n++) {
+    const page = await doc.getPage(n);
+    const content = await page.getTextContent();
+    // Textstücke zu Zeilen zusammensetzen (gleiche Höhe = gleiche Zeile)
+    let line = '', lastY = null;
+    for (const it of content.items) {
+      const y = Math.round(it.transform[5]);
+      if (lastY !== null && Math.abs(y - lastY) > 2) { text += line.trim() + '\n'; line = ''; }
+      line += (line && !line.endsWith(' ') ? ' ' : '') + it.str;
+      lastY = y;
+    }
+    text += line.trim() + '\n';
+  }
+  if (text.replace(/\s/g, '').length >= 20) return { text };
+  const page = await doc.getPage(1);
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width; canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  return { canvas };
+}
 async function readReceipt(file, onProgress) {
   ocrProgress = onProgress;
   try {
+    let image = null;
+    if (file.type === 'application/pdf') {
+      const pdf = await readPdf(file);
+      if (pdf.text) return HaushaltReceipt.parseReceipt(pdf.text);
+      image = pdf.canvas;
+    }
     const worker = await getOcrWorker();
-    const { data } = await worker.recognize(await ocrImage(file));
+    const { data } = await worker.recognize(image || await ocrImage(file));
     return HaushaltReceipt.parseReceipt(data.text);
   } finally { ocrProgress = null; }
 }
@@ -1211,7 +1444,7 @@ async function scanInto(root, file) {
   pendingFiles.push(file);
   $('.att-pick', root)?.redraw?.();
   status.className = 'small scan-status busy';
-  status.textContent = 'Kassenbon wird gelesen … (beim ersten Mal dauert es etwas länger)';
+  status.textContent = file.type === 'application/pdf' ? 'Rechnung wird gelesen …' : 'Kassenbon wird gelesen … (beim ersten Mal dauert es etwas länger)';
   let r;
   try {
     r = await readReceipt(file, (p) => { if (root.isConnected) status.textContent = `Kassenbon wird gelesen … ${p} %`; });

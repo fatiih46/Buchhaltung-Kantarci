@@ -1,9 +1,9 @@
 {
-  "version": "2026.11.24",
+  "version": "2026.11.27",
   "notes": [
-    "🧠 Die App lernt mit: Ordnest du eine Ausgabe einmal einem Topf zu (z. B. „Mayonnaise“ → Ladenausgabe), landet sie beim nächsten Mal von selbst dort.",
-    "🏷️ Jeder Topf hat Stichwörter (z. B. „Anlage“: Aktien, ETF, Depot) – sichtbar und änderbar beim Antippen des Topfs.",
-    "🥫 Viel mehr Alltagswörter erkannt: Lebensmittel wie Brot, Käse, Ketchup, Sucuk – und Anlagen wie Aktien, ETF, Bitcoin.",
-    "👤 Bei jedem Topf steht, wer ihn angelegt hat."
+    "🎤 Neu: Sprachassistent – auf ＋ tippen, „🎤 Einfach sagen“ und z. B. „120 € bei Tanken“ sprechen. Die App ordnet selbst zu, du bestätigst nur noch.",
+    "🖼️ Screenshots und PDF-Rechnungen scannen: Betrag, Geschäft und Datum werden erkannt, das passende Budget (z. B. Tanken) gewählt und abgezogen.",
+    "✏️ Freigabe in drei Stufen unter ⚙: privat, nur ansehen oder ansehen und ändern – jederzeit umschaltbar, jede Person für ihre eigenen Daten.",
+    "⚠️ Nutzungsbedingungen: Nutzung auf eigene Gefahr, ohne Haftung – einmal bestätigen."
   ]
 }

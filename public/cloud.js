@@ -223,18 +223,21 @@
     clearTimeout(summaryTimer);
     summaryTimer = setTimeout(() => { publishSummaries().catch(() => {}); }, delay);
   }
-  async function publishSummaries() {
-    if (!core || !auth || !member) return;
+  function summaryMonths(c, d) {
     const now = new Date();
     const keys = new Set();
     for (let i = -24; i <= 12; i++) keys.add(monthKey(new Date(now.getFullYear(), now.getMonth() + i, 1)));
-    for (const r of db.prepare('SELECT DISTINCT substr(date, 1, 7) AS m FROM entries WHERE user_id = 1').all()) keys.add(r.m);
+    for (const r of d.prepare('SELECT DISTINCT substr(date, 1, 7) AS m FROM entries WHERE user_id = 1').all()) keys.add(r.m);
     const months = {};
     for (const m of keys) {
-      const s = core.summaryFor(ME.id, m);
+      const s = c.summaryFor(ME.id, m);
       months[m] = Object.fromEntries(SUMMARY_FIELDS.map((k) => [k, s[k]]));
     }
-    await sb.from('summaries').upsert({ user_id: auth.uid, months, updated_at: new Date().toISOString() });
+    return months;
+  }
+  async function publishSummaries() {
+    if (!core || !auth || !member) return;
+    await sb.from('summaries').upsert({ user_id: auth.uid, months: summaryMonths(core, db), updated_at: new Date().toISOString() });
   }
 
   // ---------- Routen, die nicht in core.js stecken ----------
@@ -255,7 +258,7 @@
       email, password,
       options: {
         data: { name, invite_code: code || null, household_name: householdName || null,
-          accepted_notice: body.acceptedNotice ? new Date().toISOString() : null },
+          accepted_notice: null, accepted_terms_v2: body.acceptedNotice ? new Date().toISOString() : null },
         emailRedirectTo: location.origin + location.pathname,
       },
     });
@@ -280,10 +283,13 @@
   }
   async function me() {
     await ensureData();
-    const [hh, members] = await Promise.all([
+    const [hh, members0] = await Promise.all([
       sb.from('households').select('name, invite_code').eq('id', member.household_id).single(),
-      sb.from('members').select('user_id, name, share_all').order('created_at'),
+      sb.from('members').select('user_id, name, share_all, share_edit').order('created_at'),
     ]);
+    // setup.sql noch nicht neu ausgeführt (Spalte share_edit fehlt): ohne „Ändern erlauben“ weiter
+    const members = members0.error && members0.error.code === '42703'
+      ? await sb.from('members').select('user_id, name, share_all').order('created_at') : members0;
     if (hh.error || members.error) throw offline(hh.error || members.error);
     // „zuletzt aktiv“ für die Nutzer-Übersicht des Besitzers (nur der Zeitpunkt), einmal pro Öffnen
     if (!markedActive) { markedActive = true; sb.rpc('mark_active').then(() => {}, () => {}); }
@@ -291,14 +297,14 @@
     return {
       user: { id: auth.uid, name: member.name, email: auth.email },
       household: { name: hh.data.name, inviteCode: hh.data.invite_code },
-      members: members.data.map((m) => ({ id: m.user_id, name: m.name, shareAll: !!m.share_all })),
+      members: members.data.map((m) => ({ id: m.user_id, name: m.name, shareAll: !!m.share_all, shareEdit: !!(m.share_all && m.share_edit) })),
       isAdmin: admin.data === true,
-      noticeAccepted: !!auth.meta.accepted_notice,
+      noticeAccepted: !!auth.meta.accepted_terms_v2, // Version 2: mit Haftungsausschluss
     };
   }
   async function acceptNotice() {
     await requireAuth();
-    const { data, error } = await sb.auth.updateUser({ data: { accepted_notice: new Date().toISOString() } });
+    const { data, error } = await sb.auth.updateUser({ data: { accepted_terms_v2: new Date().toISOString() } });
     if (error) throw authError(error);
     if (data && data.user) auth.meta = data.user.user_metadata || auth.meta;
     return { ok: true };
@@ -361,27 +367,78 @@
     return { ok: true };
   }
   // Belege: Liste mit zeitlich begrenzten Links zu den Dateien
-  // ---------- Daten des Partners ansehen (nur lesen, wenn er/sie es unter ⚙ freigegeben hat) ----------
-  let view = null; // { uid, name, raw, db, core }
+  // ---------- Daten des Partners ansehen – und ändern, wenn er/sie es unter ⚙ erlaubt hat ----------
+  let view = null; // { uid, name, canEdit, raw, db, core, version, savedB64, removals }
+  async function loadView(v) {
+    const { data, error } = await sb.from('user_data').select('data, version').eq('user_id', v.uid).maybeSingle();
+    if (error) throw offline(error);
+    if (!data) throw new HttpError(403, `${v.name} hat die eigenen Einträge (noch) nicht freigegeben.`);
+    if (v.raw) v.raw.close();
+    v.raw = new SQL.Database(fromB64(data.data));
+    v.db = wrap(v.raw);
+    v.core = C.createCore(v.db, { removeFile: (p) => v.removals.push(p) });
+    v.core.migrate();
+    v.version = data.version; v.savedB64 = data.data;
+  }
   Cloud.setView = async (uid, name) => {
     await init();
     await ensureData();
     if (view) { view.raw.close(); view = null; }
-    if (!uid) return;
-    const { data, error } = await sb.from('user_data').select('data').eq('user_id', uid).maybeSingle();
-    if (error) throw offline(error);
-    if (!data) throw new HttpError(403, `${name} hat die eigenen Einträge (noch) nicht freigegeben.`);
-    const r = new SQL.Database(fromB64(data.data));
-    const vdb = wrap(r);
-    const vcore = C.createCore(vdb, {});
-    vcore.migrate(); // nur im Speicher – gespeichert wird hier nichts
-    view = { uid, name, raw: r, db: vdb, core: vcore };
+    if (!uid) return { canEdit: false };
+    const m = await sb.from('members').select('share_edit').eq('user_id', uid).maybeSingle();
+    const v = { uid, name, canEdit: !!m.data?.share_edit, raw: null, removals: [] };
+    await loadView(v);
+    view = v;
+    return { canEdit: v.canEdit };
   };
   Cloud.viewing = () => (view ? view.name : null);
+  // Änderung in den Daten des Partners (nur mit Erlaubnis – die Datenbank prüft das selbst noch einmal)
+  function mutateView(fn) {
+    const v = view;
+    const run = async () => {
+      for (let attempt = 0; ; attempt++) {
+        v.removals = [];
+        let result;
+        v.raw.exec('BEGIN');
+        try { result = clone(fn(v)); v.raw.exec('COMMIT'); }
+        catch (err) { v.raw.exec('ROLLBACK'); throw err; }
+        const bytes = v.raw.export();
+        v.raw.exec('PRAGMA foreign_keys = ON');
+        const b64 = toB64(bytes);
+        const { data, error } = await sb.from('user_data')
+          .update({ data: b64, version: v.version + 1, updated_at: new Date().toISOString() })
+          .eq('user_id', v.uid).eq('version', v.version).select('version');
+        if (error) {
+          await loadView(v).catch(() => {});
+          throw new HttpError(503, 'Speichern fehlgeschlagen – bitte Internetverbindung prüfen und erneut versuchen.');
+        }
+        if (data.length) {
+          v.version = data[0].version; v.savedB64 = b64;
+          const removed = v.removals; v.removals = [];
+          if (removed.length) sb.storage.from(BUCKET).remove(removed).catch(() => {});
+          sb.from('summaries').update({ months: summaryMonths(v.core, v.db), updated_at: new Date().toISOString() })
+            .eq('user_id', v.uid).then(() => {}, () => {});
+          return result;
+        }
+        // nichts gespeichert: entweder hat jemand anderes inzwischen gespeichert – oder die Erlaubnis wurde zurückgenommen
+        const before = v.version;
+        await loadView(v);
+        if (v.version === before) {
+          v.canEdit = false;
+          window.dispatchEvent(new Event('haushalt:viewlocked'));
+          throw new HttpError(403, `${v.name} hat das Ändern ausgeschaltet – du kannst die Einträge nur noch ansehen.`);
+        }
+        if (attempt >= 4) throw new HttpError(409, 'Die Daten wurden gerade auf einem anderen Gerät geändert. Bitte erneut versuchen.');
+      }
+    };
+    const p = queue.then(run, run);
+    queue = p.catch(() => {});
+    return p;
+  }
   // Zuordnung lernen: Wörter einer bestätigten Ausgabe merkt sich der Topf (für alle im Haushalt)
   Cloud.learnPotWords = async (potId, text) => {
     const words = window.HaushaltReceipt.significantWords(text);
-    if (!potId || !words.length || view) return;
+    if (!potId || !words.length || (view && !view.canEdit)) return;
     const all = await sb.from('pots').select('id, keywords');
     if (all.error) return;
     for (const p of all.data) {
@@ -391,10 +448,12 @@
       if (next.length !== known.length) await sb.from('pots').update({ keywords: next }).eq('id', p.id);
     }
   };
-  const readOnly = () => new HttpError(403, `Du siehst gerade die Einträge von ${view.name} – ändern kann nur ${view.name} selbst. Oben auf „Meine Daten“ wechseln.`);
+  const readOnly = () => new HttpError(403, `Du siehst gerade die Einträge von ${view.name} – ändern kann nur ${view.name} selbst (außer ${view.name} erlaubt es unter ⚙). Oben auf „Meine Daten“ wechseln.`);
+  const viewLocked = () => view && !view.canEdit;
   async function setShare(input) {
     await requireAuth();
-    const { error } = await sb.rpc('set_share_all', { p_share: !!input.share });
+    const level = ['none', 'view', 'edit'].includes(input.level) ? input.level : (input.share ? 'view' : 'none');
+    const { error } = await sb.rpc('set_share', { p_level: level });
     if (error) throw offline(error);
     return { ok: true };
   }
@@ -495,7 +554,7 @@
   Cloud.addPotEntry = async (body, file) => {
     await init();
     await ensureData();
-    if (view) throw readOnly();
+    if (viewLocked()) throw readOnly();
     const date = C.dateStr(body.date);
     const kind = body.kind === 'korrektur' ? 'korrektur' : 'ausgabe';
     let amount = C.num(body.amount, 'Betrag', { min: 0.01 });
@@ -538,8 +597,8 @@
     if (path === '/api/forgot' && method === 'POST') return forgotPassword(input);
     if (path === '/api/notice' && method === 'POST') return acceptNotice();
     if (path === '/api/share' && method === 'POST') return setShare(input);
-    // beim Ansehen fremder Daten ist alles andere als Lesen gesperrt
-    if (view && method !== 'GET') throw readOnly();
+    // beim Ansehen fremder Daten ist alles andere als Lesen gesperrt – außer der Partner hat das Ändern erlaubt
+    if (viewLocked() && method !== 'GET') throw readOnly();
     if (path === '/api/admin/users') return adminUsers();
     const adminUser = path.match(/^\/api\/admin\/users\/([0-9a-f-]{36})(\/ban)?$/);
     if (adminUser && method === 'POST' && adminUser[2]) return adminRpc('admin_set_banned', { p_user: adminUser[1], p_banned: !!input.banned });
@@ -555,11 +614,15 @@
     pm = path.match(new RegExp(`^/api/pot-entries/${UUID}$`));
     if (pm && method === 'DELETE') return deletePotRow('pot_entries', pm[1]);
     if (path === '/api/attachments' && method === 'GET') return attachments(u.searchParams, view || { core, db });
-    if (view && method === 'GET') {
-      // Lesen aus der Datenbank des Partners (Kopie im Speicher)
-      const found = view.core.match(method, path);
-      if (!found) throw new HttpError(404, 'Nicht gefunden.');
-      return clone(found.route.handler({ user: ME, body: input, params: found.params, query: u.searchParams }));
+    if (view) {
+      // Datenbank des Partners (Kopie im Speicher; Änderungen nur mit Erlaubnis)
+      if (!view.core.match(method, path)) throw new HttpError(404, 'Nicht gefunden.');
+      const callView = (v) => {
+        const found = v.core.match(method, path);
+        return found.route.handler({ user: ME, body: input, params: found.params, query: u.searchParams });
+      };
+      if (method === 'GET') { await queue; return clone(callView(view)); }
+      return mutateView(callView);
     }
     if (!core.match(method, path)) throw new HttpError(404, 'Nicht gefunden.');
     const call = () => {
@@ -573,10 +636,11 @@
   Cloud.upload = async (type, id, file) => {
     await init();
     await ensureData();
-    if (view) throw readOnly();
+    if (viewLocked()) throw readOnly();
+    const target = view ? { uid: view.uid, core: view.core } : { uid: auth.uid, core };
     const query = new URLSearchParams({ type, id: String(id) });
-    const o = core.attOwner(ME.id, query);
-    if (core.attCount(o.type, o.id) >= core.MAX_FILES_PER_ITEM) throw new HttpError(400, `Maximal ${core.MAX_FILES_PER_ITEM} Belege pro Eintrag.`);
+    const o = target.core.attOwner(ME.id, query);
+    if (target.core.attCount(o.type, o.id) >= target.core.MAX_FILES_PER_ITEM) throw new HttpError(400, `Maximal ${target.core.MAX_FILES_PER_ITEM} Belege pro Eintrag.`);
     const ftype = String(file.type || '').toLowerCase();
     if (!C.UPLOAD_TYPES[ftype]) throw new HttpError(415, 'Nur Fotos (JPG, PNG, WEBP, HEIC) oder PDF erlaubt.');
     if (!file.size) throw new HttpError(400, 'Datei ist leer.');
@@ -584,16 +648,17 @@
     if (!C.fileMatchesType(ftype, new Uint8Array(await file.slice(0, 12).arrayBuffer())))
       throw new HttpError(415, 'Dateiinhalt passt nicht zum Dateityp.');
     const rand = crypto.getRandomValues(new Uint8Array(16)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
-    const path = `${auth.uid}/${rand}${C.UPLOAD_TYPES[ftype]}`;
+    const path = `${target.uid}/${rand}${C.UPLOAD_TYPES[ftype]}`; // Beleg liegt im Ordner der Person, der der Eintrag gehört
     const up = await sb.storage.from(BUCKET).upload(path, file, { contentType: ftype, upsert: false });
     if (up.error) throw new HttpError(400, `Upload fehlgeschlagen: ${up.error.message}`);
+    const insert = (c, d) => {
+      const owner = c.attOwner(ME.id, query);
+      const newId = Number(d.prepare(`INSERT INTO attachments (user_id, owner_type, owner_id, file_name, file_type, file_path)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(ME.id, owner.type, owner.id, C.cleanFileName(file.name), ftype, path).lastInsertRowid);
+      return { ok: true, id: newId };
+    };
     try {
-      return await mutate(() => {
-        const owner = core.attOwner(ME.id, query);
-        const newId = Number(db.prepare(`INSERT INTO attachments (user_id, owner_type, owner_id, file_name, file_type, file_path)
-          VALUES (?, ?, ?, ?, ?, ?)`).run(ME.id, owner.type, owner.id, C.cleanFileName(file.name), ftype, path).lastInsertRowid);
-        return { ok: true, id: newId };
-      });
+      return await (view ? mutateView((v) => insert(v.core, v.db)) : mutate(() => insert(core, db)));
     } catch (err) {
       sb.storage.from(BUCKET).remove([path]).catch(() => {});
       throw err;
@@ -612,10 +677,13 @@
     try {
       await queue;
       const { data } = await sb.from('user_data').select('version').eq('user_id', auth.uid).maybeSingle();
-      if (data && data.version !== version) {
-        await loadData();
-        window.dispatchEvent(new Event('haushalt:sync'));
+      let changed = false;
+      if (data && data.version !== version) { await loadData(); changed = true; }
+      if (view) {
+        const v = await sb.from('user_data').select('version').eq('user_id', view.uid).maybeSingle();
+        if (v.data && v.data.version !== view.version) { await loadView(view); changed = true; }
       }
+      if (changed) window.dispatchEvent(new Event('haushalt:sync'));
     } catch { /* offline – später erneut */ }
   });
 })();

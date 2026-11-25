@@ -159,6 +159,26 @@ const assert = require('assert/strict');
   await assert.rejects(as(A, `update public.members set share_all = true where user_id = $1`, [B]), /permission denied|row-level/, 'Freigabe nur selbst');
   await as(B, `select public.set_share_all(false)`);
   assert.equal((await as(A, `select * from user_data where user_id = $1`, [B])).length, 0, 'zurückgenommen');
+  // Ändern erlauben (zweite Stufe): nur wenn B es einschaltet, nur in eine Richtung, jederzeit zurücknehmbar
+  await as(B, `insert into public.summaries (user_id, months) values ($1, '{}')`, [B]);
+  await as(B, `select public.set_share('edit')`);
+  assert.equal((await as(A, `update user_data set data = 'VON-A' where user_id = $1 returning 1`, [B])).length, 1, 'mit Erlaubnis änderbar');
+  assert.equal((await as(A, `update public.summaries set months = '{"x":1}' where user_id = $1 returning 1`, [B])).length, 1, 'Summen auch');
+  await as(A, `insert into storage.objects (bucket_id, name) values ('belege', $1)`, [`${B}/von-a.jpg`]);
+  assert.equal((await as(A, `delete from storage.objects where name = $1 returning 1`, [`${B}/von-a.jpg`])).length, 1, 'Belege hochladen/löschen');
+  assert.equal((await as(A, `delete from user_data where user_id = $1 returning 1`, [B])).length, 0, 'ganze Daten löschen nie');
+  assert.equal((await as(B, `update user_data set data = 'X' where user_id = $1 returning 1`, [A])).length, 0, 'gilt nur in eine Richtung');
+  assert.equal((await as(E, `update user_data set data = 'X' where user_id = $1 returning 1`, [B])).length, 0, 'andere Haushalte nie');
+  await assert.rejects(as(E, `insert into storage.objects (bucket_id, name) values ('belege', $1)`, [`${B}/fremd.jpg`]), /row-level/);
+  await as(B, `select public.set_share('view')`);
+  assert.equal((await as(A, `update user_data set data = 'X' where user_id = $1 returning 1`, [B])).length, 0, 'nur ansehen: nicht mehr änderbar');
+  assert.equal((await as(A, `select data from user_data where user_id = $1`, [B]))[0].data, 'VON-A', 'aber lesbar');
+  await assert.rejects(as(A, `insert into storage.objects (bucket_id, name) values ('belege', $1)`, [`${B}/x.jpg`]), /row-level/);
+  await as(B, `select public.set_share('edit')`);
+  await as(B, `select public.set_share_all(false)`);
+  const lvl = (await pg.query('select share_all, share_edit from public.members where user_id = $1', [B])).rows[0];
+  assert.deepEqual([lvl.share_all, lvl.share_edit], [false, false], 'alte Abschaltung nimmt auch Ändern zurück');
+  assert.equal((await as(A, `update user_data set data = 'X' where user_id = $1 returning 1`, [B])).length, 0);
   // Löschen eines Topfs entfernt seine Ausgaben
   await as(A, `delete from public.pots where id = $1`, [pot]);
   assert.equal((await pg.query('select count(*)::int n from public.pot_entries')).rows[0].n, 0);

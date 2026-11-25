@@ -6,7 +6,7 @@
   <title>Haushaltsbuch</title>
   <meta name="theme-color" content="#1f6f5c">
   <!-- muss mit public/version.json übereinstimmen (wird getestet) -->
-  <meta name="app-version" content="2026.11.24">
+  <meta name="app-version" content="2026.11.27">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
@@ -80,7 +80,7 @@
       <button type="button" data-tab="household">Haushalt</button>
     </nav>
     <div id="viewBanner" class="view-banner" hidden>
-      <span>👀 Einträge von <strong id="viewName"></strong> – nur ansehen</span>
+      <span id="viewText"><span id="viewLead">👀 Einträge von </span><strong id="viewName"></strong> – <span id="viewMode">nur ansehen</span></span>
       <button type="button" class="btn small" id="viewBack">Zurück zu meinen</button>
     </div>
     </div>
@@ -255,9 +255,14 @@
           <button type="button" class="btn ghost" id="showNotice">📄 Hinweis zur Nutzung</button>
         </div>
         <div class="card" id="shareCard" hidden>
-          <h2>👀 Gegenseitig ansehen</h2>
-          <label class="check"><input type="checkbox" id="shareAll"> Die anderen in unserem Haushalt dürfen <strong>alle meine Einträge und Belege ansehen</strong></label>
-          <p class="muted small">Nur ansehen – ändern kann jede Person nur ihre eigenen Daten. Du kannst die Freigabe jederzeit wieder ausschalten. Hat dein Partner / deine Partnerin ebenfalls freigegeben, kannst du oben unter deinem Namen umschalten.</p>
+          <h2>👀 Freigabe für den Haushalt</h2>
+          <p class="muted small">Was dürfen die anderen in eurem Haushalt mit <strong>deinen</strong> Einträgen und Belegen machen?</p>
+          <div class="share-levels" role="radiogroup" aria-label="Freigabe">
+            <label class="check"><input type="radio" name="shareLevel" value="none"> <span>🔒 <strong>Nichts</strong> – meine Einträge bleiben privat</span></label>
+            <label class="check"><input type="radio" name="shareLevel" value="view"> <span>👀 <strong>Ansehen</strong> – nur lesen, nichts ändern</span></label>
+            <label class="check"><input type="radio" name="shareLevel" value="edit"> <span>✏️ <strong>Ansehen und ändern</strong> – darf auch eintragen, ändern und löschen</span></label>
+          </div>
+          <p class="muted small">Du kannst das jederzeit wieder umstellen – es gilt sofort. Jede Person entscheidet nur über ihre eigenen Daten (in beide Richtungen getrennt). Hat dein Partner / deine Partnerin freigegeben, kannst du oben unter deinem Namen umschalten.</p>
         </div>
         <div class="card" id="adminCard" hidden>
           <div class="card-head"><h2>👑 Wer nutzt die App?</h2><button type="button" class="btn small" id="adminReload">Aktualisieren</button></div>
@@ -282,21 +287,23 @@
 
   <!-- Hinweis zur Nutzung (vor der Registrierung und einmal für bestehende Konten) -->
   <dialog id="noticeDlg" aria-labelledby="noticeTitle">
-    <h2 id="noticeTitle">⚠️ Bitte kurz lesen</h2>
+    <h2 id="noticeTitle">⚠️ Nutzungsbedingungen – bitte lesen</h2>
     <div class="notice-text">
       <p>Dieses Haushaltsbuch ist ein <strong>privates Projekt für Familie und Freunde</strong> – keine geprüfte Finanz-App eines Unternehmens.</p>
       <ul>
-        <li><strong>Nutzung auf eigene Verantwortung.</strong> Es gibt keine Garantie, dass immer alles fehlerfrei funktioniert oder dass Daten nie verloren gehen. Sichere deine Daten ab und zu unter ⚙ „Daten als CSV exportieren“.</li>
+        <li><strong>Nutzung auf eigene Gefahr.</strong> Die App wird kostenlos und ohne Gewähr bereitgestellt. Es gibt keine Garantie, dass sie immer erreichbar ist, fehlerfrei rechnet oder dass Daten nie verloren gehen. Sichere deine Daten ab und zu unter ⚙ „Daten als CSV exportieren“.</li>
+        <li><strong>Keine Haftung.</strong> Der Betreiber übernimmt – soweit gesetzlich zulässig – keine Haftung für Schäden, Datenverlust, falsche Berechnungen oder Entscheidungen, die du auf Grundlage der App triffst. Das gilt nicht bei Vorsatz oder grober Fahrlässigkeit.</li>
         <li><strong>Keine besonderen Schutzmechanismen</strong> wie bei Banken (z. B. keine Zwei-Faktor-Anmeldung, keine Prüfung durch Dritte). Trag deshalb <strong>keine Passwörter, PINs, TANs oder Zugangsdaten</strong> ein und verwende ein eigenes, sicheres Passwort.</li>
-        <li><strong>Datenschutz:</strong> Deine Einträge sieht in der App nur dein eigenes Konto; im gemeinsamen Haushalt sieht die andere Person nur Monatssummen und die gemeinsamen Budgets – außer du gibst unter ⚙ „Gegenseitig ansehen“ frei, dann darf sie alles ansehen (aber nicht ändern). Der Betreiber sieht in seiner Übersicht nur, <em>wer</em> die App nutzt (Name, E-Mail, Haushalt, Anmelde- und Nutzungszeitpunkt) – keine Beträge oder Einträge. Technisch liegen die Daten bei Supabase (Server in Frankfurt); als Verwalter der Datenbank hätte der Betreiber dort Zugriff, schaut sich Inhalte aber nicht an.</li>
+        <li><strong>Datenschutz:</strong> Deine Einträge sieht in der App nur dein eigenes Konto; im gemeinsamen Haushalt sieht die andere Person nur Monatssummen und die gemeinsamen Budgets – außer du gibst unter ⚙ „Gegenseitig ansehen“ frei, dann darf sie alles ansehen – und, wenn du es ausdrücklich erlaubst, auch ändern. Der Betreiber sieht in seiner Übersicht nur, <em>wer</em> die App nutzt (Name, E-Mail, Haushalt, Anmelde- und Nutzungszeitpunkt) – keine Beträge oder Einträge. Technisch liegen die Daten bei Supabase (Server in Frankfurt); als Verwalter der Datenbank hätte der Betreiber dort Zugriff, schaut sich Inhalte aber nicht an.</li>
         <li>Berechnungen (z. B. verfügbarer Betrag, Zekât) sind eine <strong>Hilfe</strong> und ersetzen keine Beratung.</li>
         <li>Konto oder Daten löschen lassen: einfach beim Betreiber melden.</li>
       </ul>
     </div>
+    <label class="check notice-accept"><input type="checkbox" id="noticeAccept"> Ich habe die Nutzungsbedingungen gelesen und akzeptiere sie: <strong>Nutzung auf eigene Gefahr, keine Haftung des Betreibers.</strong></label>
     <div class="dlg-actions">
       <button type="button" class="btn ghost" id="noticeCancel">Abbrechen</button>
       <span class="spacer"></span>
-      <button type="button" class="btn primary" id="noticeOk">Verstanden</button>
+      <button type="button" class="btn primary" id="noticeOk" disabled>Akzeptieren</button>
     </div>
   </dialog>
 
@@ -315,7 +322,11 @@
   <!-- Schnell eintragen -->
   <dialog id="quickDlg" class="sheet" aria-labelledby="quickTitle">
     <h2 id="quickTitle">Was möchtest du eintragen?</h2>
-    <button type="button" class="btn scan-btn wide" data-qa="scan">📷 Kassenbon scannen</button>
+    <button type="button" class="btn voice-btn wide" data-qa="voice">🎤 Einfach sagen <small>z. B. „120 € bei Tanken“</small></button>
+    <div class="scan-row">
+      <button type="button" class="btn scan-btn" data-qa="scan">📷 Kassenbon fotografieren</button>
+      <button type="button" class="btn scan-btn alt" data-qa="scanpick">🖼️ Screenshot / Rechnung (PDF)</button>
+    </div>
     <div class="quick-grid">
       <button type="button" data-qa="ausgabe"><span>💸</span>Ausgabe</button>
       <button type="button" data-qa="einnahme"><span>💶</span>Einnahme / Erstattung</button>
@@ -347,6 +358,7 @@
 
   <datalist id="shopList"></datalist>
   <input type="file" id="scanInput" accept="image/*" capture="environment" hidden>
+  <input type="file" id="scanPick" accept="image/*,application/pdf" hidden>
   <div id="toast" class="toast" hidden></div>
   <script src="config.js"></script>
   <script src="core.js"></script>
