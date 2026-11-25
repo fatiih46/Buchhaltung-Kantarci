@@ -1,9 +1,6 @@
 {
-  "version": "2026.11.24",
+  "version": "2026.11.25",
   "notes": [
-    "🧠 Die App lernt mit: Ordnest du eine Ausgabe einmal einem Topf zu (z. B. „Mayonnaise“ → Ladenausgabe), landet sie beim nächsten Mal von selbst dort.",
-    "🏷️ Jeder Topf hat Stichwörter (z. B. „Anlage“: Aktien, ETF, Depot) – sichtbar und änderbar beim Antippen des Topfs.",
-    "🥫 Viel mehr Alltagswörter erkannt: Lebensmittel wie Brot, Käse, Ketchup, Sucuk – und Anlagen wie Aktien, ETF, Bitcoin.",
-    "👤 Bei jedem Topf steht, wer ihn angelegt hat."
+    "↪️ Übertrag gut sichtbar: In jedem gemeinsamen Budget steht oben „Übertrag aus (Vormonat)“ mit dem übernommenen Rest bzw. der Überschreitung."
   ]
 }

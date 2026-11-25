@@ -450,3 +450,4 @@ body.readonly #kasseBox, body.readonly .quick { display: none !important; }
 .pot-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
 .pot-entries li.korrektur .title { font-weight: 500; }
 body.readonly .pot-actions { display: none !important; }
+.pot-entries li.carry { background: var(--primary-soft); border-radius: 8px; padding-left: .5rem; padding-right: .5rem; }

@@ -301,6 +301,14 @@ ${dd}      17:12
   const tank2 = k2.pots.find((p) => p.name === 'Tanken');
   assert.equal(tank2.carryIn, 138.5);
   assert.equal(tank2.available, 338.5);
+  // in der Ansicht des nächsten Monats steht der Übertrag als eigene Zeile mit Vermerk
+  await fatih.evaluate((m) => { state.month = m; render(); }, nextYm);
+  await fatih.waitForFunction(() => /Übertrag aus/.test(document.querySelector('#potList').textContent));
+  assert.match(await fatih.textContent('#potList .pot-entries li.carry'), /Rest aus dem Vormonat[\s\S]*\+138,50/);
+  await fatih.waitForTimeout(250);
+  if (OUT) await fatih.locator('#potList .pot').first().screenshot({ path: path.join(OUT, 'cloud-25-uebertrag.png') });
+  await fatih.evaluate((m) => { state.month = m; render(); }, curYm);
+  await fatih.waitForFunction(() => document.querySelector('#potList').textContent.includes('Aral'));
   // Betrag ab nächstem Monat ändern: dieser Monat bleibt gleich
   const eink = k1.pots.find((p) => p.name === 'Einkaufen');
   await api(fatih, 'PUT', `/api/pots/${eink.id}`, { name: 'Einkaufen', icon: '🛒', amount: '180', carryover: 'on', categories: eink.categories.join('|'), month: nextYm });

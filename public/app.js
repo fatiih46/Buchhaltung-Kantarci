@@ -456,7 +456,11 @@ async function renderKasse() {
       <div class="progress ${p.available < 0 ? 'over' : ''}"><i style="width:${pct}%"></i></div>
       ${p.carryIn < 0 ? `<p class="pot-warn">⚠️ Aus dem Vormonat wurden <strong>${fmt(-p.carryIn)}</strong> Überschreitung übernommen.</p>` : ''}
       ${p.available < 0 ? `<p class="pot-warn">⚠️ ${fmt(-p.available)} überschritten – wird${p.carryover ? ' in den nächsten Monat übertragen' : ' festgehalten'}. Achtet mehr darauf oder passt das Budget an (oben antippen).</p>` : ''}
-      ${p.entries.length ? `<ul class="list compact pot-entries">${p.entries.map((e) => e.kind === 'korrektur' ? `<li class="korrektur">
+      ${p.entries.length || p.carryIn ? `<ul class="list compact pot-entries">${p.carryIn ? `<li class="carry">
+        <div class="main"><div class="title">↪️ Übertrag aus ${monthLabel(shiftMonth(state.month, -1))}</div>
+          <div class="meta">${p.carryIn > 0 ? 'Rest aus dem Vormonat – automatisch übernommen' : 'Überschreitung aus dem Vormonat – automatisch übernommen'}</div></div>
+        <div class="right num ${p.carryIn < 0 ? 'neg' : 'pos'}">${p.carryIn > 0 ? '+' : '−'}${fmt(Math.abs(p.carryIn))}</div>
+      </li>` : ''}${p.entries.map((e) => e.kind === 'korrektur' ? `<li class="korrektur">
         <div class="main"><div class="title">✏️ Korrektur: ${esc(e.note)}</div>
           <div class="meta">${fmtDate(e.date)} · ${esc(e.who)}</div></div>
         <div class="right num ${e.amount < 0 ? 'neg' : 'pos'}">${e.amount > 0 ? '+' : '−'}${fmt(Math.abs(e.amount))}</div>
